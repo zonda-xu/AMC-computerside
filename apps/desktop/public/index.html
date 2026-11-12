@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>电脑连接助手 · AI Maid Café</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+  <header class="topbar"><div class="brand"><svg viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="5" width="24" height="17" rx="3"/><path d="M11 27h10M16 22v5M10 12l3 3-3 3M17 18h5"/></svg><span>AI Maid Café</span><span class="product">电脑连接助手</span></div><span id="system-label" class="system-label">正在识别系统</span></header>
+  <div class="layout">
+    <aside class="sidebar"><p class="sidebar-title">让手机连接这台电脑</p><nav aria-label="设置步骤"><ol id="steps">
+      <li><button data-step="0" aria-current="step"><span>1</span><div>准备环境<small>确认电脑已准备好</small></div></button></li>
+      <li><button data-step="1"><span>2</span><div>选择连接方式<small>同一网络或远程中转</small></div></button></li>
+      <li><button data-step="2"><span>3</span><div>接入 AI 终端<small>选择程序和项目目录</small></div></button></li>
+      <li><button data-step="3"><span>4</span><div>手机扫码配对<small>建立独立的信任关系</small></div></button></li>
+      <li><button data-step="4"><span>5</span><div>开始使用<small>确认设备与首次任务</small></div></button></li>
+    </ol></nav><div class="sidebar-note"><span class="status-dot" id="gateway-dot"></span><strong id="gateway-status">网关尚未启动</strong><p>保留助手的启动窗口，让手机持续访问电脑。</p><button id="stop" class="text-button" hidden>停止网关</button></div></aside>
+    <main id="main">
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <section class="step-panel" data-panel="0" aria-labelledby="title-0">
+        <h1 id="title-0" tabindex="-1">先让电脑准备好。</h1><p class="intro">只需在这台电脑配置一次。之后，用手机向 AI 发起任务、查看结果，并处理需要你确认的操作。</p>
+        <div class="checklist"><div class="check-row"><span class="check-icon" id="node-icon">…</span><div><h2>运行环境</h2><p id="node-check">正在检查 Node.js…</p></div><span class="badge">Node.js 24</span></div><div class="check-row"><span class="check-icon" id="ssl-icon">…</span><div><h2>加密连接</h2><p id="ssl-check">正在检查 OpenSSL…</p></div><span class="badge">独立证书</span></div><div class="check-row"><span class="check-icon" id="net-icon">…</span><div><h2>电脑网络</h2><p id="net-check">正在检查本机地址…</p></div><button class="secondary" id="refresh-check">重新检测</button></div></div>
+        <details id="install-help"><summary>缺少环境？查看本系统安装指引</summary><div id="platform-help"></div><p>安装完毕后重新打开助手。AI 程序需要先在电脑上完成官方登录；助手不会收集账号密码。</p><a href="https://nodejs.org/en/download/archive/v24.18.0" target="_blank" rel="noreferrer">下载 Node.js 24</a></details>
+        <div class="note"><h2>手机端只需要安装 AI Maid Café</h2><p>电脑包已包含网关、配对工具和终端适配器，不需要 DevEco Studio 或 HarmonyOS 工程。</p></div>
+      </section>
+      <section class="step-panel" data-panel="1" aria-labelledby="title-1" hidden>
+        <h1 id="title-1" tabindex="-1">你想从哪里连接？</h1><p class="intro">先用同一 Wi-Fi 完成首次连接；需要离开家或办公室后继续使用时，再配置远程中转。</p>
+        <fieldset class="connection-options"><legend>连接方式</legend><label class="choice"><input type="radio" name="mode" value="lan" checked><div><strong>同一 Wi-Fi / 局域网</strong><p>手机与电脑在同一网络。无需服务器，适合首次使用。</p></div></label><label class="choice"><input type="radio" name="mode" value="relay"><div><strong>通过 EasyTier 远程中转</strong><p>沿用独立的 App 网络。手机使用 HTTPS，无需安装 VPN。</p></div></label></fieldset>
+        <div class="fields"><label>电脑名称<input id="host-name" maxlength="100" required placeholder="例如：书房的电脑" autocomplete="off"></label><label>本机连接地址<select id="address" required></select><small id="address-help">请选择手机能够访问的网卡地址。</small></label></div>
+        <div id="lan-help" class="note"><h2>同一网络的三个小检查</h2><ol><li>手机与电脑接入同一 Wi-Fi，避开访客网络和设备隔离。</li><li id="firewall-help">只在可信的专用网络中，允许网关使用 TCP 8899。</li><li>如果电脑 IP 变化，回来更新地址并重新为手机配对。可在路由器上固定电脑 IP。</li></ol></div>
+        <div id="relay-help" hidden><label>中转服务器域名<input id="public-host" placeholder="例如：relay.example.com" autocomplete="off"><small>填写你自己已解析到服务器的域名，不含协议和端口。</small></label><details><summary>还没有配置 EasyTier？生成主机与中转配置</summary><ol><li>在电脑和服务器安装与你现有部署一致的 EasyTier（项目基线为 2.6.4）。</li><li>首次部署可留空密钥，生成新网络配置。其他电脑加入同一网络时，填写同一密钥。</li><li>将 host.toml 留在这台电脑；将 relay.toml 放到独立的中转服务目录。已有中转服务时，不要覆盖其配置。</li><li id="et-command">使用 easytier-core -c host.toml 启动电脑端。</li><li>服务器以 easytier-core -c relay.toml 运行独立实例，开放 TCP 12080 和对应的公网入口；保留端到端 TLS。</li><li>返回此页重新检测网卡，确认指定的 10.89.90.x 地址出现。</li></ol><label>已有 App 网络密钥（首次部署可留空）<input id="network-secret" type="password" autocomplete="off" placeholder="独立网络的 base64url 密钥"></label><div class="actions"><button id="network-generate" class="secondary">生成两份配置</button><button id="network-host" class="secondary" hidden>下载 host.toml</button><button id="network-relay" class="secondary" hidden>下载 relay.toml</button></div><p id="network-note" hidden>配置文件内包含网络密钥。仅交给受信任的部署者，不要发给手机或上传公开仓库。</p><a href="https://easytier.rs/guide/network/config-file.html" target="_blank" rel="noreferrer">EasyTier 官方配置说明</a></details><p id="relay-mapping" class="note"></p><button id="refresh-network" class="secondary">重新检测网卡</button></div>
+      </section>
+      <section class="step-panel" data-panel="2" aria-labelledby="title-2" hidden>
+        <h1 id="title-2" tabindex="-1">把常用的 AI 接进来。</h1><p class="intro">选择本机已安装的程序。助手会读取完整版本并写入配置；你的模型账号继续保留在各个 AI 程序中。</p>
+        <label>允许手机访问的项目目录<div class="input-action"><input id="workspace" required placeholder="选择已存在的项目文件夹"><button id="browse" class="secondary">浏览文件夹</button></div><small>选择具体的项目目录。此设置限制网关的文件接口；原生 AI 仍遵循它自己的执行权限。</small></label>
+        <div id="folder-browser" class="folder-browser" hidden><div class="actions"><button id="folder-up" class="secondary">上一级</button><button id="folder-select" class="primary">选择当前文件夹</button><button id="folder-close" class="text-button">收起</button></div><p id="folder-current" class="path"></p><div id="folder-list"></div></div>
+        <div id="runtimes" class="runtimes"></div><button id="probe-all" class="secondary">检测已选择的程序</button>
+        <details id="dsh-help" hidden><summary>DeepSeek Harness 还需要配置本机桥接插件</summary><p>在 DSH 宿主加载电脑包中的 plugins/dsh-bridge/index.mjs。网关启动后，将以下配置交给宿主插件配置入口：</p><pre id="dsh-config"></pre><p>hostVersion 必须与已检测的 DSH 完整版本一致。桥接运行在本机 8898 端口，需要在真实宿主中验收。</p></details>
+        <div class="note"><h2>先登录，再开始</h2><p>请在电脑终端启动你选择的 AI，确认能够正常对话后退出。检测到版本只代表程序可执行；登录状态与原生协议兼容性需要首次任务验证。</p></div>
+      </section>
+      <section class="step-panel" data-panel="3" aria-labelledby="title-3" hidden>
+        <h1 id="title-3" tabindex="-1">现在，拿起你的手机。</h1><p class="intro">二维码只属于这台电脑。请让你信任的手机扫码，每张二维码两分钟内有效，且只能使用一次。</p>
+        <div class="pair-layout"><div class="qr-column"><div class="qr-frame" id="qr-frame"><img id="qr" alt="这台电脑的一次性配对二维码" hidden><div id="qr-empty"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M4 17V4h13M31 4h13v13M44 31v13H31M17 44H4V31"/><path d="M13 13h7v7h-7zM28 13h7v7h-7zM13 28h7v7h-7zM28 28h7v7h-7z"/></svg><p>启动网关后生成二维码</p></div></div><p id="qr-status" class="qr-status" aria-live="polite">尚未生成</p><button id="generate-pair" class="primary">启动网关并生成二维码</button><div class="actions download-actions"><button id="download-qr" class="text-button" disabled>保存二维码</button><button id="download-json" class="text-button" disabled>下载配对 JSON</button></div></div><div class="pair-instructions"><h2>在 AI Maid Café 手机端</h2><ol><li><strong>打开“添加主机”</strong><p>进入主机管理，选择添加主机。</p></li><li><strong>扫描左侧二维码</strong><p>也可把配对 JSON 的内容粘贴到“粘贴配对内容”，然后验证并配对。</p></li><li><strong>确认电脑已出现在列表</strong><p>设备完成配对后，下方状态会自动更新。</p></li></ol><div class="endpoint"><span>手机连接地址</span><code id="endpoint">尚未配置</code></div><button id="verify" class="secondary">检测连接入口</button><p id="verify-result" class="muted">检测会验证证书与主机身份；手机所在网络仍需实际扫码验证。</p></div></div>
+        <div id="paired-banner" class="note success" hidden></div><details><summary>扫码失败或无法连接？</summary><ul><li>二维码过期或已经使用：点击重新生成，旧二维码立即失效。</li><li>局域网模式：检查同一 Wi-Fi、电脑防火墙和网卡地址。</li><li>远程模式：检查域名解析、EasyTier 本机地址及服务器 TCP 映射。</li><li>证书失败：检查手机与电脑时间，以及证书域名，不要关闭证书验证。</li></ul><p>离开此页面会隐藏当前二维码，需要时可重新生成。</p></details>
+      </section>
+      <section class="step-panel" data-panel="4" aria-labelledby="title-4" hidden>
+        <h1 id="title-4" tabindex="-1">连接好，从一个小任务开始。</h1><p class="intro">先确认一轮真实对话，再把日常任务交给手机。电脑需要保持联网，助手和相应 AI 程序需要正常运行。</p>
+        <h2>第一次使用</h2><ol class="first-task"><li>在手机“工作区”中登记下方项目目录。</li><li>新建会话，选择这台电脑上已启用的 AI 程序。</li><li>发送“请说明这个项目的目录结构”，检查回复；需要操作权限时，在手机确认。</li></ol><div class="endpoint"><span>已授权的项目目录</span><code id="workspace-summary"></code></div>
+        <h2 class="section-heading">已配对的手机</h2><div id="devices"><p class="muted">等待手机完成扫码配对。</p></div><div class="note"><h2>下次怎么打开？</h2><p id="reopen-help"></p><p>再次打开助手后点击“启动网关”。已有手机无需重复配对。更换连接地址后，请在手机移除旧主机并重新扫码。</p></div><details><summary>电脑身份和数据位置</summary><p id="data-location" class="path"></p><p>配置、CA 私钥和设备记录只保存在这台电脑。分发给其他电脑的应是原始工具包。</p><p>主机 CA 指纹（SHA-256）</p><code id="fingerprint" class="path"></code></details>
+      </section>
+      <footer class="step-footer"><button id="back" class="secondary" hidden>上一步</button><span id="step-count">第 1 步，共 5 步</span><button id="next" class="primary">继续，选择连接方式 <span aria-hidden="true">→</span></button></footer>
+    </main>
+  </div>
+  <dialog id="stop-dialog"><h2>停止这台电脑的网关？</h2><p>手机连接将断开。正在执行的 AI 任务可能中断或变为待核实状态，请先确认任务已结束。</p><div class="actions"><button id="stop-cancel" class="secondary">继续保持连接</button><button id="stop-confirm" class="danger">停止网关</button></div></dialog>
+  <dialog id="qr-dialog"><div class="actions"><h2>扫描配对二维码</h2><button id="qr-close" class="secondary">关闭大图</button></div><img id="qr-large" alt="放大的配对二维码"><p>与原二维码同时过期，且仅可兑换一次。</p></dialog>
+</body></html>

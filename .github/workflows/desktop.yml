@@ -1,0 +1,63 @@
+name: Desktop checks and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+      - name: OpenSSL path on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"C:\Program Files\Git\usr\bin" >> $env:GITHUB_PATH'
+      - name: OpenSSL path on macOS
+        if: runner.os == 'macOS'
+        run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run check:source
+      - run: npm test
+
+  release:
+    needs: test
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run package:desktop
+      - name: Publish a new version without replacing existing releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="v$(node -p 'require("./package.json").version')"
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release $version already exists; increment package.json to publish a new version."
+            exit 0
+          fi
+          artifacts=(dist/desktop/*/*.zip dist/desktop/*/SHA256SUMS.txt)
+          gh release create "$version" "${artifacts[@]}" --target "$GITHUB_SHA" --title "AMC 电脑连接助手 $version" --notes-file docs/DESKTOP_RELEASE.md

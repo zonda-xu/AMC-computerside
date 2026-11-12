@@ -1,0 +1,32 @@
+{
+  "name": "amc-computerside",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.13.0 <25"
+  },
+  "scripts": {
+    "start": "node start.mjs",
+    "desktop": "node apps/desktop/src/main.ts",
+    "gateway": "node apps/gateway/src/main.ts",
+    "init:host": "node apps/gateway/src/setup.ts",
+    "pair": "node apps/gateway/src/pair-cli.ts",
+    "package:desktop": "node scripts/package-desktop.mjs",
+    "test": "node --test tests/contracts/*.test.ts tests/gateway/*.test.ts tests/desktop/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "check:source": "node scripts/check-source.mjs"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "qrcode": "1.5.4",
+    "ws": "8.22.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/qrcode": "1.5.6",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.3"
+  },
+  "description": "Independent Windows, macOS and Linux host setup wizard for AI Maid Café"
+}

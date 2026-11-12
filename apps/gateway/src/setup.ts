@@ -1,0 +1,22 @@
+import { parseArgs, promisify } from 'node:util';
+import { mkdir, writeFile, chmod, access } from 'node:fs/promises';
+import { resolve, join, dirname } from 'node:path';
+import { execFile } from 'node:child_process';
+import { randomUUID, randomBytes } from 'node:crypto';
+import { platform } from 'node:os';
+const {values:v}=parseArgs({options:{data:{type:'string',default:'data'},name:{type:'string'},address:{type:'string'},public:{type:'string'},'public-port':{type:'string'},'workspace-root':{type:'string',multiple:true},out:{type:'string',default:'host.config.json'}}});
+if(!v.name||!v.address||!v.public||!v['workspace-root']?.length||!['18541','18542','18543'].includes(v['public-port']||''))throw new Error('Required: --name NAME --address OVERLAY_IP --public HOSTNAME --public-port 18541|18542|18543 --workspace-root EXISTING_DIR');
+if(!/^10\.89\.90\.[234]$/.test(v.address)||!/^[a-z0-9.-]+$/i.test(v.public))throw new Error('Use the planned overlay IP and a DNS hostname');
+try{await access(v.out!);throw new Error('Host config already exists; setup will not replace its trust identity');}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
+const dir=resolve(v.data!);await mkdir(dirname(dir),{recursive:true,mode:0o700});await mkdir(dir,{mode:0o700});
+const ca=join(dir,'host-ca.pem'),cakey=join(dir,'host-ca.key'),key=join(dir,'gateway.key'),csr=join(dir,'gateway.csr'),cert=join(dir,'gateway.pem'),ext=join(dir,'server.ext');
+const run=promisify(execFile);const hostId=randomUUID();
+await run('openssl',['req','-x509','-newkey','rsa:3072','-sha256','-nodes','-days','3650','-keyout',cakey,'-out',ca,'-subj',`/CN=AI-Maid-Cafe-${hostId}`,'-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign']);
+await run('openssl',['req','-newkey','rsa:3072','-nodes','-keyout',key,'-out',csr,'-subj',`/CN=${v.public}`]);
+await writeFile(ext,`basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:${v.public},IP:${v.address}\n`,{mode:0o600});
+await run('openssl',['x509','-req','-in',csr,'-CA',ca,'-CAkey',cakey,'-CAcreateserial','-out',cert,'-days','365','-sha256','-extfile',ext]);
+for(const p of [cakey,key])await chmod(p,0o600);
+const bridgeTokenFile=join(dir,'dsh-bridge.secret');await writeFile(bridgeTokenFile,randomBytes(32).toString('hex'),{mode:0o600});
+const runtimes=Object.fromEntries(['codex','claude-code','opencode','deepseek-harness'].map(id=>[id,{command:id==='claude-code'?'claude':id==='deepseek-harness'?'dsh':id,expectedVersion:'SET_EXACT_NATIVE_VERSION_OUTPUT',models:[],...(id==='deepseek-harness'?{bridgeTokenFile}:{})}]));
+await writeFile(v.out!,JSON.stringify({hostId,name:v.name,os:platform(),listen:v.address,port:8899,publicEndpoint:`https://${v.public}:${v['public-port']}`,dataDir:dir,caFile:ca,certFile:cert,keyFile:key,allowedWorkspaceRoots:v['workspace-root']!.map(p=>resolve(p)),runtimes},null,2)+'\n',{mode:0o600,flag:'wx'});
+console.log(`Created ${v.out}. Configure exact native versions and model identities before running the gateway. Private CA keys stay on this host.`);

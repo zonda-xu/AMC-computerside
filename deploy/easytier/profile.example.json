@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 2,
+  "driver": "easytier-tcp",
+  "relayId": "agent-console-vps",
+  "relayPublicHost": "relay.example.com",
+  "peerListenPort": 12080,
+  "networkName": "agent-console-mesh",
+  "networkCIDR": "10.89.90.0/24",
+  "networkSecretRef": "secret:easytier/agent-console-mesh",
+  "gatewayLocalPort": 8899,
+  "hosts": [
+    { "hostId": "mac-home", "overlayIPv4": "10.89.90.3", "publicPort": 18541 },
+    { "hostId": "linux-lab", "overlayIPv4": "10.89.90.4", "publicPort": 18542 },
+    { "hostId": "windows-dev", "overlayIPv4": "10.89.90.2", "publicPort": 18543 }
+  ]
+}

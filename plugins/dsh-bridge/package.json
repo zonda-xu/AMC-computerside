@@ -1,0 +1,8 @@
+{
+  "name": "ai-maid-cafe-dsh-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "Local semantic bridge to the independent AI Maid Café gateway",
+  "dependencies": { "ws": "8.22.2" }
+}

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+output/
+.impeccable/
+data/
+*.pem
+*.key
+*.secret
+*.sqlite*
+*.csr
+*.srl
+*.log
+host.config.json
+pairing-*
+.env

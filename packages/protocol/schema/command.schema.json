@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AI Maid Café command v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "hostId",
+    "clientRequestId",
+    "sessionId",
+    "ref",
+    "action",
+    "payload"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": 1
+    },
+    "hostId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "clientRequestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hostId",
+        "workspaceId",
+        "runtimeInstanceId",
+        "engineId",
+        "nativeSessionId"
+      ],
+      "properties": {
+        "hostId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "runtimeInstanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "engineId": {
+          "enum": [
+            "codex",
+            "claude-code",
+            "opencode",
+            "deepseek-harness"
+          ]
+        },
+        "nativeSessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    },
+    "action": {
+      "enum": [
+        "submit",
+        "cancel",
+        "decide",
+        "configure"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

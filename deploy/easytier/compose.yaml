@@ -1,0 +1,17 @@
+# Separate Compose project. Never point this at the existing personal network.
+name: agent-console-easytier
+services:
+  relay:
+    image: ${ET_IMAGE:?Set an exact tested EasyTier 2.6.4 image digest}
+    container_name: agent-console-easytier-relay
+    restart: unless-stopped
+    ports:
+      - "12080:12080/tcp"
+      - "18541:18541/tcp"
+      - "18542:18542/tcp"
+      - "18543:18543/tcp"
+    volumes:
+      - ./relay.toml:/etc/easytier/relay.toml:ro
+    command: ["--config-file", "/etc/easytier/relay.toml"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]

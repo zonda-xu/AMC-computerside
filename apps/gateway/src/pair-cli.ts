@@ -1,0 +1,10 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { parseArgs } from 'node:util';
+import QRCode from 'qrcode';
+import { Store } from './store.ts';
+const {values:v}=parseArgs({options:{config:{type:'string',default:'host.config.json'},out:{type:'string',default:'pairing-device.png'}}});
+const c=JSON.parse(await readFile(v.config!,'utf8'));const store=new Store(join(c.dataDir,'console.sqlite'));const {token,expiresAt}=store.ticket();
+const ticket={type:'ai-maid-cafe/pair',protocolVersion:1,hostId:c.hostId,name:c.name,os:c.os,endpoint:c.publicEndpoint,caPem:await readFile(c.caFile,'utf8'),ticket:token,expiresAt};
+await QRCode.toFile(v.out!,JSON.stringify(ticket),{errorCorrectionLevel:'L',width:1000,margin:3});
+console.log(`Pairing QR saved to ${v.out}; expires at ${new Date(expiresAt).toISOString()}. Treat the unredeemed QR as a credential.`);store.close();
