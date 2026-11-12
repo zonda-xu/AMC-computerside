@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -18,9 +18,10 @@ export class TestAdapter implements AgentAdapter {
   close(){}
 }
 export async function fixture(hostId='test-host'){
-  const dir=await mkdtemp(join(tmpdir(),'amc-test-'));const root=join(dir,'projects');await mkdir(root);const a=join(root,'a');const b=join(root,'b');await mkdir(a);await mkdir(b);
+  const dir=await realpath(await mkdtemp(join(tmpdir(),'amc-test-')));const root=join(dir,'projects');await mkdir(root);const a=join(root,'a');const b=join(root,'b');await mkdir(a);await mkdir(b);
   const store=new Store(join(dir,'console.sqlite'));const core=new Core(store,hostId,[root]);const adapter=new TestAdapter(core.context('codex'));core.adapters.set('codex',adapter);const w=await core.registerWorkspace(a,'A');const wb=await core.registerWorkspace(b,'B');const s=await core.createSession('device','create-1',w.id,'codex');
   return{dir,root,store,core,adapter,w,wb,s,close:async()=>{await core.drain();store.close();await rm(dir,{recursive:true,force:true});}};
 }
 export function command(s:Session,action='submit',payload:Record<string,unknown>={text:'Update README',attachmentIds:[]}):Command{return{protocolVersion:1,hostId:s.ref.hostId,clientRequestId:randomUUID(),sessionId:s.id,ref:s.ref,action:action as Command['action'],payload};}
 export const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
+
