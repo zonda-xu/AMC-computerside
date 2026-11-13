@@ -1,0 +1,2 @@
+# Upstream schema fixtures are hashed byte-for-byte; never rewrite their newlines.
+tests/contracts/codex-generated/** -text
