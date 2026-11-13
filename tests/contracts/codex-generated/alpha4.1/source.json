@@ -1,0 +1,14 @@
+{
+  "package": "@openai/codex",
+  "version": "0.167.0-alpha.4.1",
+  "gitCommit": "d2c035639366e0bf2c316aa2065c24aabc12bcdc",
+  "provenanceUrl": "https://registry.npmjs.org/-/npm/v1/attestations/@openai%2fcodex@0.167.0-alpha.4.1",
+  "schemas": {
+    "ThreadListParams.json": "e3b8159458d241284c0161636061b4cd8ab4f041f108a3d3183f336f5ac71ac3",
+    "ThreadListResponse.json": "11d9b4977c722ada2f3e32aa46d0ada111bd2d016ec4f885076cd28e1cbf2449",
+    "ThreadReadParams.json": "dfe040c6ac71d30795b8be3f3ff232e66f362a37f883b491e5d1ea367f470db4",
+    "ThreadReadResponse.json": "4b1a0bb5d6896a5ef1c03045e35ca262b21471e07d4e322d874995b6fd31c094",
+    "ThreadTurnsListParams.json": "2a8b93d7d4437cc25e16a1dde16d8db3c338d39e16c5eece2a56e943a21577d7",
+    "ThreadTurnsListResponse.json": "bccb5eb4fcde318825e4e92cadb85cda57315fceb9e46a3b6dc0582f91c2c72b"
+  }
+}

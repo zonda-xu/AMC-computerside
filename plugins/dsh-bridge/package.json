@@ -1,8 +1,8 @@
 {
   "name": "ai-maid-cafe-dsh-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "main": "index.mjs",
-  "description": "Local semantic bridge to the independent AI Maid Café gateway",
+  "description": "Read-only verified DSH rc.5 history bridge, protocol 2",
   "dependencies": { "ws": "8.22.2" }
 }

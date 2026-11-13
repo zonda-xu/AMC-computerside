@@ -2,7 +2,7 @@ import { createServer, type ServerOptions } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Core } from './core.ts';
-import { Fault, object, requireValue, string } from '../../../packages/protocol/src/validation.ts';
+import { Fault, object, requireValue, string, validateWorkspaceCreate } from '../../../packages/protocol/src/validation.ts';
 import { MAX_FILE, listProject, projectDiff, readProject, upload } from './files.ts';
 import type { ConsoleEvent, EngineId, ModelIdentity, Session, Workspace } from '../../../packages/protocol/src/types.ts';
 import { digest } from './store.ts';
@@ -25,6 +25,19 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
         const p=await jsonBody(req,32_768);requireValue(p.hostId===core.hostId,'host_mismatch','Pairing targets another host',409);reply({...core.store.redeem(string(p.ticket,'ticket',200),string(p.deviceName,'deviceName',100)),...about});return;
       }
       const device=auth(req);
+      if(path==='/v1/workspace-roots'&&req.method==='GET'){reply({items:await core.workspaceCreator.roots()});return;}
+      if(path==='/v1/workspaces/create'&&req.method==='POST'){const p=await jsonBody(req,32_768);requireValue(validateWorkspaceCreate(p),'invalid_field','Invalid directory creation request');reply(await core.workspaceCreator.create(device,p.clientRequestId,p.rootId,p.directoryName,p.name));return;}
+      const directoryOperation=path.match(/^\/v1\/workspace-operations\/([A-Za-z0-9_.:-]+)$/);
+      if(directoryOperation&&req.method==='GET'){reply(core.workspaceCreator.status(device,directoryOperation[1]));return;}
+      if(path==='/v1/external-capabilities'&&req.method==='GET'){reply({items:await core.external.capabilities()});return;}
+      if(path==='/v1/external-sessions'&&req.method==='GET'){const engineId=url.searchParams.get('engineId');requireValue(engineId==='codex'||engineId==='claude-code'||engineId==='opencode'||engineId==='deepseek-harness','engine_invalid','Unknown external engine');reply(await core.external.discover(string(url.searchParams.get('workspaceId'),'workspaceId'),engineId,url.searchParams.get('cursor')||undefined));return;}
+      const external=path.match(/^\/v1\/external-sessions\/([a-f0-9]{64})\/(history|import)$/);
+      if(external&&external[2]==='history'&&req.method==='GET'){reply(await core.external.history(external[1],url.searchParams.get('cursor')||undefined));return;}
+      if(external&&external[2]==='import'&&req.method==='POST'){const p=await jsonBody(req,4096);reply(await core.external.import(device,string(p.clientRequestId,'clientRequestId',100),external[1]));return;}
+      const observation=path.match(/^\/v1\/sessions\/([A-Za-z0-9-]+)\/observation$/);
+      if(observation&&req.method==='POST'){const p=await jsonBody(req,4096);reply(await core.external.sync(observation[1],p.cursor===undefined?undefined:string(p.cursor,'cursor',4096)));return;}
+      const handoff=path.match(/^\/v1\/sessions\/([A-Za-z0-9-]+)\/(handoffs|control-leases)$/);
+      if(handoff&&req.method==='POST'){const session=core.session(handoff[1]);core.workspace(session.ref.workspaceId);requireValue(session.externalSource,'source_missing','Not an external source',409);throw new Fault(409,'handoff_unverified','No verified original-writer termination, child termination or exclusive host-control evidence. Create a separate gateway-managed session; external continuation and leases remain disabled.');}
       if(path==='/v1/bootstrap'&&req.method==='GET'){reply({...about,workspaces:core.store.list('workspace'),sessions:core.store.list<Session>('session').map(s=>({...s,messages:[],tools:[],agents:[],interactions:s.interactions.filter(i=>i.status==='pending'||i.status==='responding')})),runtimes:await Promise.all([...core.adapters.values()].map(a=>a.probe())),devices:core.store.devices()});return;}
       if(path==='/v1/workspaces'&&req.method==='POST'){const p=await jsonBody(req,32_768);reply(await core.registerWorkspace(string(p.path,'path',4096),string(p.name,'name',100)));return;}
       if(path==='/v1/sessions'&&req.method==='POST'){const p=await jsonBody(req,32_768);reply(await core.createSession(device,string(p.clientRequestId,'clientRequestId'),string(p.workspaceId,'workspaceId'),p.engineId as EngineId,p.model as ModelIdentity|undefined));return;}
@@ -33,7 +46,7 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       const s=path.match(/^\/v1\/sessions\/([A-Za-z0-9-]+)\/(snapshot|events|history|messages|reconcile)$/);
       if(s){const session=core.session(s[1]);
         if(s[2]==='snapshot'&&req.method==='GET'){reply(snapshotWindow(session));return;}
-        if(s[2]==='reconcile'&&req.method==='POST'){core.workspace(session.ref.workspaceId);await core.adapters.get(session.ref.engineId)!.resumeSession(session);reply(snapshotWindow(core.session(session.id)));return;}
+        if(s[2]==='reconcile'&&req.method==='POST'){core.workspace(session.ref.workspaceId);requireValue(!session.externalSource,'external_read_only','Use passive external observation, not native resume',409);await core.adapters.get(session.ref.engineId)!.resumeSession(session);reply(snapshotWindow(core.session(session.id)));return;}
         if(s[2]==='messages'&&req.method==='GET'){const before=Number(url.searchParams.get('before')||session.watermark+1);requireValue(Number.isSafeInteger(before)&&before>0,'cursor_invalid','Invalid cursor');const all=session.messages.filter(m=>(m.startSeq||1)<before);const messages=all.slice(-100);reply({messages,hasMore:all.length>100,beforeSeq:messages[0]?.startSeq||1});return;}
         if((s[2]==='events'||s[2]==='history')&&req.method==='GET'){
           const cursor=Number(url.searchParams.get(s[2]==='events'?'after':'before')||(s[2]==='events'?0:session.watermark+1));requireValue(Number.isSafeInteger(cursor)&&cursor>=0,'cursor_invalid','Invalid cursor');
@@ -68,8 +81,10 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
   const onEvent=(event:ConsoleEvent)=>{for(const [ws,p]of peers)if(p.sessions.has(event.sessionId))send(ws,{type:'event',event});};
   const onReceipt=({device,receipt}:any)=>{for(const[ws,p]of peers)if(p.device===device)send(ws,{type:'receipt',receipt});};
   core.on('event',onEvent);core.on('receipt',onReceipt);
+  const onCatalog=()=>{for(const ws of peers.keys())send(ws,{type:'catalog.changed'});};
+  core.on('catalog.changed',onCatalog);
   const onRevoke=(id:string)=>{for(const[ws,p]of peers)if(p.device===id)ws.close(4001,'Device revoked');};
   core.on('device-revoked',onRevoke);
-  server.on('close',()=>{core.off('event',onEvent);core.off('receipt',onReceipt);core.off('device-revoked',onRevoke);for(const ws of peers.keys())ws.terminate();wss.close();});
+  server.on('close',()=>{core.off('event',onEvent);core.off('receipt',onReceipt);core.off('catalog.changed',onCatalog);core.off('device-revoked',onRevoke);for(const ws of peers.keys())ws.terminate();wss.close();});
   return server;
 }

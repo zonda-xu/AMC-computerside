@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Authorized one-level workspace creation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["clientRequestId", "rootId", "directoryName", "name"],
+  "properties": {
+    "clientRequestId": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "rootId": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "directoryName": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "\\S" }
+  }
+}

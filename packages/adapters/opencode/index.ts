@@ -24,12 +24,14 @@ export class OpenCodeAdapter extends AdapterBase implements AgentAdapter {
   }
   async createSession(id:string,w:Workspace,model?:ModelIdentity){
     const rpc=await this.connection(w.path);const r=await rpc.request<Native>('session/new',{cwd:w.path,mcpServers:[],additionalDirectories:w.writeRoots.filter(p=>p!==w.path)});
-    if(model)await rpc.request('session/set_config_option',{sessionId:r.sessionId,configId:'model',value:`${model.providerId}/${model.modelId}`});
+    const configured=model?await rpc.request<Native>('session/set_config_option',{sessionId:r.sessionId,configId:'model',value:`${model.providerId}/${model.modelId}`}):r;
+    const confirmed=this.currentModel(configured.configOptions||[]);
+    if(model&&!confirmed)throw new Error('Native model selection was not confirmed');
     if(this.rpc!==rpc)throw new Error('OpenCode connection lost during session creation');
-    this.byNative.set(r.sessionId,id);this.loaded.add(id);this.configOptions.set(id,r.configOptions||[]);
-    return {nativeSessionId:r.sessionId as string,model:model||this.currentModel(r.configOptions||[])};
+    this.byNative.set(r.sessionId,id);this.loaded.add(id);this.configOptions.set(id,configured.configOptions||[]);
+    return {nativeSessionId:r.sessionId as string,model:confirmed};
   }
-  currentModel(options:Native[]):ModelIdentity|undefined{const m=options.find(o=>o.id==='model')?.currentValue;if(typeof m!=='string')return;const slash=m.indexOf('/');if(slash<1)return;return{providerId:m.slice(0,slash),modelId:m.slice(slash+1),label:m};}
+  currentModel(options:Native[]):ModelIdentity|undefined{const m=options.find(o=>o.id==='model')?.currentValue;if(typeof m!=='string')return;const slash=m.indexOf('/');if(slash<1||slash===m.length-1)return;return{providerId:m.slice(0,slash),modelId:m.slice(slash+1),label:m};}
   async resumeSession(s:Session){
     const rpc=await this.connection(s.cwd);this.byNative.set(s.ref.nativeSessionId,s.id);if(this.loaded.has(s.id))return;
     this.loading.add(s.id);
@@ -52,7 +54,7 @@ export class OpenCodeAdapter extends AdapterBase implements AgentAdapter {
     }).catch(e=>{if(this.rpc===rpc)this.fault(s.id,e);});
   }
   async requestCancel(s:Session){this.rpc!.notify('session/cancel',{sessionId:s.ref.nativeSessionId});}
-  async configure(s:Session,model:ModelIdentity){const r=await this.rpc!.request<Native>('session/set_config_option',{sessionId:s.ref.nativeSessionId,configId:'model',value:`${model.providerId}/${model.modelId}`});const confirmed=this.currentModel(r.configOptions||[]);if(!confirmed)throw new Error('Native model change was not confirmed');this.context.emit(s.id,'model.confirmed',{model:confirmed});}
+  async configure(s:Session,model:ModelIdentity){const r=await this.rpc!.request<Native>('session/set_config_option',{sessionId:s.ref.nativeSessionId,configId:'model',value:`${model.providerId}/${model.modelId}`});const confirmed=this.currentModel(r.configOptions||[]);if(!confirmed)throw new Error('Native model change was not confirmed');this.configOptions.set(s.id,r.configOptions);this.context.emit(s.id,'model.confirmed',{model:confirmed});}
   request(m:RpcMessage){
     const p=m.params as Native;const id=this.byNative.get(p?.sessionId);if(!id||m.id===undefined){if(m.id!==undefined)this.rpc!.reject(m.id,'Unmanaged session');return;}
     if(m.method==='session/request_permission')this.interaction(id,m.id,m.method,{title:p.toolCall?.title||'OpenCode 权限请求',detail:JSON.stringify(p.toolCall,null,2),writeRoots:(p.toolCall.locations||[]).map((l:Native)=>dirname(l.path)),choices:p.options.map((o:Native)=>({id:o.optionId,label:o.name,scope:o.kind,allows:['allow_once','allow_always'].includes(o.kind)}))});

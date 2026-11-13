@@ -16,12 +16,25 @@ test('HTTPS pairing, WSS snapshot cut, offline execution and device revocation',
   const connect=(token:string)=>new Promise<WebSocket>((resolve,reject)=>{const ws=new WebSocket(`wss://localhost:${port}/v1/events`,{ca:tls.cert,headers:{'X-AMC-Host':'test-host',Authorization:'Bearer '+token}});sockets.push(ws);ws.once('open',()=>resolve(ws));ws.once('error',reject);});
   try{
     assert.equal((await req('/v1/bootstrap')).status,401);
+    for(const path of ['/v1/workspace-roots','/v1/external-capabilities','/v1/external-sessions'])assert.equal((await req(path)).status,401);
+    assert.equal((await req('/v1/workspaces/create','POST',{})).status,401);
     const t=f.store.ticket();const paired=await req('/v1/pair','POST',{hostId:'test-host',ticket:t.token,deviceName:'Test Phone'});assert.equal(paired.status,200);const token=paired.data.token;
     assert.equal((await req('/v1/bootstrap','GET',undefined,token,'wrong-host')).status,409);
     await assert.rejects(()=>req('/v1/hello','GET',undefined,'','test-host','wrong.invalid'));
     const ws=await connect(token);const frames:any[]=[];ws.on('message',raw=>frames.push(JSON.parse(raw.toString()).data));ws.send(JSON.stringify({type:'subscribe',hostId:'test-host',sessionIds:[f.s.id]}));
     await new Promise<void>((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('No ready frame')),3000);const listener=(raw:Buffer)=>{if(JSON.parse(raw.toString()).data.type==='ready'){clearTimeout(timer);ws.off('message',listener);resolve();}};ws.on('message',listener);});
     const snapshot=frames.find(v=>v.type==='snapshot').snapshot;assert.equal(snapshot.watermark,0);
+    const roots=await req('/v1/workspace-roots','GET',undefined,token);assert.equal(roots.status,200);assert.equal(roots.data.items.length,1);
+    const directory={clientRequestId:'transport-directory',rootId:roots.data.items[0].rootId,directoryName:'transport-new',name:'Transport'};
+    const created=await req('/v1/workspaces/create','POST',directory,token);assert.equal(created.status,200);
+    assert.equal((await req('/v1/workspaces/create','POST',directory,token)).data.id,created.data.id);
+    assert.equal((await req('/v1/workspace-operations/transport-directory','GET',undefined,token)).data.stage,'done');
+    assert.equal((await req('/v1/workspaces/create','POST',{...directory,path:'../../escape'},token)).status,400);
+    assert.equal((await req('/v1/external-capabilities','GET',undefined,token)).data.items.length,4);
+    const imported={...f.s,id:'fixture-imported',externalSource:{namespace:'fixture-instance',nativeId:f.s.ref.nativeSessionId,generation:'fixture-generation',profile:'TEST DOUBLE',readOnly:true}};f.store.put('session',imported.id,imported);
+    for(const action of ['submit','cancel','configure','decide'])assert.equal((await req('/v1/commands','POST',command(imported,action),token)).data.error.code,'external_read_only');
+    assert.equal((await req('/v1/sessions/'+imported.id+'/reconcile','POST',{},token)).data.error.code,'external_read_only');
+    for(const operation of ['handoffs','control-leases'])assert.equal((await req('/v1/sessions/'+imported.id+'/'+operation,'POST',{},token)).data.error.code,'handoff_unverified');
     const c=command(f.s);assert.equal((await req('/v1/commands','POST',c,token)).data.status,'received');await f.core.drain();assert.equal(f.adapter.submitted,1);
     ws.close();await new Promise<void>(r=>ws.once('close',()=>r()));
     assert.equal(f.core.session(f.s.id).state,'running');f.adapter.context.emit(f.s.id,'message.completed',{id:'offline-result',role:'assistant',text:'Completed while phone was offline'});f.adapter.context.emit(f.s.id,'run.updated',{state:'completed'});

@@ -6,9 +6,13 @@ import { ACTIVE, ENGINES } from '../../../packages/protocol/src/types.ts';
 import { exactRef, Fault, object, requireValue, stable, string, validateCommand } from '../../../packages/protocol/src/validation.ts';
 import { Store, digest } from './store.ts';
 import { canonical, inside, overlaps, readProject, MAX_FILE } from './files.ts';
+import { WorkspaceCreator } from './workspace-create.ts';
+import { ExternalSessions } from './external.ts';
 export class Core extends EventEmitter {
   store:Store;hostId:string;allowedRoots:string[];adapters=new Map<EngineId,AgentAdapter>();
   private inFlight=new Set<Promise<void>>();
+  workspaceCreator=new WorkspaceCreator(this);
+  external=new ExternalSessions(this);
   constructor(store:Store,hostId:string,allowedRoots:string[]){super();this.store=store;this.hostId=hostId;this.allowedRoots=allowedRoots;}
   session(id:string){const s=this.store.get<Session>('session',id);requireValue(s,'session_missing','Session not found',404);return s;}
   workspace(id:string){const w=this.store.get<Workspace>('workspace',id);requireValue(w,'workspace_missing','Project not found',404);for(const root of [w.path,...w.writeRoots])requireValue(this.allowedRoots.some(base=>inside(base,root)),'root_not_granted','Project is outside current host-configured workspace roots',403);return w;}
@@ -45,25 +49,32 @@ export class Core extends EventEmitter {
     // Recheck immediately before insertion, after all asynchronous canonicalization.
     const all=this.store.list<Workspace>('workspace');
     for(const w of all)requireValue(!w.writeRoots.some(a=>roots.some(b=>overlaps(a,b))),'overlapping_project','Managed project roots overlap',409);
-    const w:Workspace={id:randomUUID(),hostId:this.hostId,name,path:actual,writeRoots:[...new Set(roots)]};this.store.put('workspace',w.id,w);return w;
+    const w:Workspace={id:randomUUID(),hostId:this.hostId,name,path:actual,writeRoots:[...new Set(roots)]};this.store.put('workspace',w.id,w);this.emit('catalog.changed');return w;
   }
   async createSession(device:string,requestId:string,wid:string,engineId:EngineId,model?:ModelIdentity){
-    requireValue(ENGINES.includes(engineId),'engine_invalid','Unknown runtime');const w=this.workspace(wid);const adapter=this.adapters.get(engineId)!;
+    requireValue(ENGINES.includes(engineId),'engine_invalid','Unknown runtime');const w=this.workspace(wid);const adapter=this.adapters.get(engineId);
+    requireValue(adapter,'runtime_missing','Runtime adapter is unavailable');
+    if(model)requireValue(typeof model.providerId==='string'&&model.providerId.length>0&&typeof model.modelId==='string'&&model.modelId.length>0&&typeof model.label==='string','model_invalid','Invalid model identity');
     const identity={kind:'session.create',wid,engineId,model};const r=this.store.receive(device,requestId,identity);
     const registered=this.store.get<{sessionId:string}>('creation',device+':'+requestId);if(registered)return this.session(registered.sessionId);
     requireValue(r.fresh,'creation_uncertain','Creation has already been received; inspect native state before creating another session',409);
     const id=randomUUID();
+    let nativeStarted=false;
     try{
+      if(model){const descriptor=await adapter.probe();requireValue(descriptor.models.some(m=>m.providerId===model.providerId&&m.modelId===model.modelId),'model_not_registered','Select an explicitly registered native model');}
+      nativeStarted=true;
       const native=await adapter.createSession(id,w,model);
       const runtime=this.store.get<{id:string;epoch:number}>('runtime',engineId)!;
-      const s:Session={id,ref:{hostId:this.hostId,workspaceId:wid,engineId,runtimeInstanceId:runtime.id,nativeSessionId:native.nativeSessionId},title:'新会话',cwd:w.path,state:'idle',epoch:runtime.epoch,model:native.model,messages:[],tools:[],agents:[],interactions:[],watermark:0,historyStart:1,updatedAt:Date.now()};
-      this.store.transaction(()=>{this.store.put('session',id,s);this.store.put('creation',device+':'+requestId,{sessionId:id});});this.setReceipt(device,{clientRequestId:requestId,status:engineId==='claude-code'?'received':'native_accepted',...(engineId==='claude-code'?{detail:'Session UUID durably reserved; native creation is not yet confirmed'}:{})});return s;
-    }catch(e){this.setReceipt(device,{clientRequestId:requestId,status:'uncertain',detail:(e as Error).message});throw e;}
+      const confirmed=native.model&&typeof native.model.providerId==='string'&&native.model.providerId.length>0&&typeof native.model.modelId==='string'&&native.model.modelId.length>0?native.model:undefined;
+      const s:Session={id,ref:{hostId:this.hostId,workspaceId:wid,engineId,runtimeInstanceId:runtime.id,nativeSessionId:native.nativeSessionId},title:'新会话',cwd:w.path,state:'idle',epoch:runtime.epoch,model:confirmed,nextModel:model&&(!confirmed||confirmed.providerId!==model.providerId||confirmed.modelId!==model.modelId)?model:undefined,messages:[],tools:[],agents:[],interactions:[],watermark:0,historyStart:1,updatedAt:Date.now()};
+      this.store.transaction(()=>{this.store.put('session',id,s);this.store.put('creation',device+':'+requestId,{sessionId:id});});this.emit('catalog.changed');this.setReceipt(device,{clientRequestId:requestId,status:engineId==='claude-code'?'received':'native_accepted',...(engineId==='claude-code'?{detail:'Session UUID durably reserved; native creation is not yet confirmed'}:{})});return s;
+    }catch(e){this.setReceipt(device,{clientRequestId:requestId,status:nativeStarted?'uncertain':'rejected',detail:e instanceof Error?e.message:'Creation failed'});throw e;}
   }
   accept(device:string,command:unknown):Receipt{
     requireValue(validateCommand(command),'invalid_command',JSON.stringify(validateCommand.errors));const c=command as Command;
     requireValue(c.hostId===this.hostId,'host_mismatch','Command targets another host',409);
     const s=this.session(c.sessionId);requireValue(exactRef(c.ref,s.ref),'target_mismatch','Full native session identity does not match',409);
+    requireValue(!s.externalSource,'external_read_only','External history is read-only; original writer stop and control lease are not verified',409);
     const r=this.store.receive(device,c.clientRequestId,c);if(!r.fresh)return r.receipt;
     // Persist first, dispatch once. Restart recovery never schedules these again.
     const work=new Promise<void>(resolve=>setImmediate(()=>{void this.execute(device,c).catch(e=>this.setReceipt(device,{clientRequestId:c.clientRequestId,status:e instanceof Fault?'rejected':'uncertain',detail:(e as Error).message})).finally(resolve);}));
@@ -72,6 +83,7 @@ export class Core extends EventEmitter {
   async drain(){await Promise.all([...this.inFlight]);}
   async execute(device:string,c:Command){
     const s=this.session(c.sessionId);const a=this.adapters.get(s.ref.engineId)!;const p=c.payload;
+    requireValue(!s.externalSource,'external_read_only','External projection cannot dispatch native mutations',409);
     if(c.action==='submit'){
       requireValue(typeof p.text==='string'&&p.text.length<=100_000,'text_invalid','Invalid text');
       requireValue(Array.isArray(p.attachmentIds)&&p.attachmentIds.length<=10&&p.attachmentIds.every(id=>typeof id==='string'),'attachments_invalid','Invalid attachment IDs');
@@ -101,7 +113,8 @@ export class Core extends EventEmitter {
       requireValue(!ACTIVE.includes(s.state),'run_active','Change next-turn model between runs',409);
       const model=object(p.model) as unknown as ModelIdentity;
       const descriptor=await a.probe();requireValue(descriptor.models.some(m=>m.providerId===model.providerId&&m.modelId===model.modelId),'model_not_registered','Select an explicitly registered native model');
-      await a.configure(s,model);const updated=this.session(s.id);if(!updated.model||!exactRef(updated.model,model)){updated.nextModel=model;this.store.put('session',s.id,updated);}
+      await a.configure(s,model);const updated=this.session(s.id);if(!updated.model||updated.model.providerId!==model.providerId||updated.model.modelId!==model.modelId){updated.nextModel=model;this.store.put('session',s.id,updated);}
+      this.emit('catalog.changed');
       this.setReceipt(device,{clientRequestId:c.clientRequestId,status:'native_accepted',detail:'Next-turn model requested; character updates only after native confirmation'});
     }else if(c.action==='decide'){
       const d=p as unknown as Decision;const i=s.interactions.find(v=>v.id===d.interactionId);

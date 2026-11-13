@@ -8,7 +8,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   if(m.method==='initialize')result={protocolVersion:1,agentCapabilities:{loadSession:true}};
   if(m.method==='thread/resume'){
     send({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'old-turn',status:'completed'}}});
-    result={thread:{status:{type:'idle'},turns:[{id:'old-turn',status:'completed',items:[]}]}};
+    result={modelProvider:'openai',model:'test-model',thread:{status:{type:'idle'},turns:[{id:'old-turn',status:'completed',items:[]}]}};
   }
   if(m.method==='turn/start'){
     if(process.env.RPC_EARLY_COMPLETION==='1'){send({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:'new-turn',status:'completed'}}});send({id:m.id,result:{turn:{id:'new-turn'}}});return;}

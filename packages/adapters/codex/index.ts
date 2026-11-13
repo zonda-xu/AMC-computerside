@@ -28,13 +28,13 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     const r=await rpc.request<Native>('thread/start',{cwd:w.path,...(model?{model:model.modelId,modelProvider:model.providerId}:{})});
     if(this.rpc!==rpc)throw new Error('Codex connection lost during session creation');
     this.byNative.set(r.thread.id,id);this.loaded.add(id);
-    return{nativeSessionId:r.thread.id as string,model:{providerId:r.modelProvider,modelId:r.model,label:r.model}};
+    return{nativeSessionId:r.thread.id as string,model:typeof r.modelProvider==='string'&&r.modelProvider&&typeof r.model==='string'&&r.model?{providerId:r.modelProvider,modelId:r.model,label:r.model}:undefined};
   }
   async resumeSession(s:Session){
     const rpc=await this.connection(s.cwd);this.byNative.set(s.ref.nativeSessionId,s.id);
     if(this.loaded.has(s.id)&&(this.submitting.has(s.id)||!ACTIVE.includes(s.state)))return;
     const r=await rpc.request<Native>('thread/resume',{threadId:s.ref.nativeSessionId,cwd:s.cwd,excludeTurns:false});if(this.rpc!==rpc)throw new Error('Codex connection lost during resume');this.loaded.add(s.id);
-    this.context.emit(s.id,'model.confirmed',{model:{providerId:r.modelProvider,modelId:r.model,label:r.model}});
+    if(typeof r.modelProvider==='string'&&r.modelProvider&&typeof r.model==='string'&&r.model)this.context.emit(s.id,'model.confirmed',{model:{providerId:r.modelProvider,modelId:r.model,label:r.model}});
     for(const turn of r.thread.turns || [])for(const item of turn.items || [])if(item.type==='agentMessage')this.context.emit(s.id,'message.completed',{id:item.id,text:item.text,role:'assistant'});
     const turns=r.thread.turns || [];const last=turns.at(-1);
     if(this.submitting.has(s.id)){if(r.thread.status?.type!=='idle')throw new Error('Previous Codex turn is not confirmed idle');return;}
@@ -47,9 +47,9 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     const content:Native[]=[{type:'text',text:input.text,text_elements:[]}];
     for(const a of input.attachments)if(a.mime.startsWith('image/'))content.push({type:'image',url:`data:${a.mime};base64,${a.dataBase64}`});else content[0].text+='\n附件（项目内路径）：'+a.relativePath;
     const rpc=this.rpc!;const completed=new Map<string,'completed'|'failed'|'cancelled'|'uncertain'>();this.starting.set(s.id,completed);
-    try{const r=await rpc.request<{turn:{id:string}}>('turn/start',{threadId:s.ref.nativeSessionId,input:content,clientUserMessageId:input.requestId,...(model?{model:model.modelId}:{})},120_000);
+    try{const r=await rpc.request<Native>('turn/start',{threadId:s.ref.nativeSessionId,input:content,clientUserMessageId:input.requestId,...(model?{model:model.modelId}:{})},120_000);
     if(this.rpc!==rpc)throw new Error('Codex connection lost during turn start');
-    if(model)this.context.emit(s.id,'model.confirmed',{model});
+    if(typeof r.modelProvider==='string'&&r.modelProvider&&typeof r.model==='string'&&r.model)this.context.emit(s.id,'model.confirmed',{model:{providerId:r.modelProvider,modelId:r.model,label:r.model}});
     const state=this.context.getSession(s.id).state;
     if(completed.has(r.turn.id))for(const i of this.context.getSession(s.id).interactions)if(i.status==='responding'||i.status==='pending')this.context.emit(s.id,'interaction.closed',{id:i.id,status:i.status==='responding'?'resolved':'stale'});
     this.context.emit(s.id,'run.updated',{state:completed.get(r.turn.id)||(state==='accepted'?'running':state),runId:r.turn.id,nativeAccepted:true});

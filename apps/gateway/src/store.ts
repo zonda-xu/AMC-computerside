@@ -53,15 +53,16 @@ export class Store {
   }
   receipt(device: string, receipt: Receipt) { this.db.prepare('UPDATE commands SET json=? WHERE device=? AND id=?').run(JSON.stringify(receipt),device,receipt.clientRequestId); }
   getReceipt(device: string, id: string): Receipt | undefined { const r = this.db.prepare('SELECT json FROM commands WHERE device=? AND id=?').get(device,id); return r ? JSON.parse(r.json as string) : undefined; }
-  event(id: string, type: EventType, data: Record<string, unknown>): ConsoleEvent {
-    return this.transaction(() => {
+  event(id: string, type: EventType, data: Record<string, unknown>, transactional = true): ConsoleEvent {
+    const apply = (): ConsoleEvent => {
       const s = this.get<Session>('session',id); if (!s) throw new Fault(404,'session_missing','Session not registered');
       const event: ConsoleEvent = { sessionId: id, ref: s.ref, seq: s.watermark + 1, time: Date.now(), type, data };
       project(s,event);
       this.db.prepare('INSERT INTO events VALUES(?,?,?)').run(id,event.seq,JSON.stringify(event));
       this.put('session',id,s);
       return event;
-    });
+    };
+    return transactional ? this.transaction(apply) : apply();
   }
   events(id: string, after: number, limit = 500) { return this.db.prepare('SELECT json FROM events WHERE session=? AND seq>? ORDER BY seq LIMIT ?').all(id,after,limit).map(r=>JSON.parse(r.json as string) as ConsoleEvent); }
   history(id: string, before: number, limit = 100) { return this.db.prepare('SELECT json FROM events WHERE session=? AND seq<? ORDER BY seq DESC LIMIT ?').all(id,before,limit).reverse().map(r=>JSON.parse(r.json as string) as ConsoleEvent); }
@@ -100,7 +101,7 @@ export function project(s: Session, e: ConsoleEvent) {
     if (typeof d.nativeKey==='string')m.nativeKey=d.nativeKey;
   }
   if (e.type === 'run.updated') { s.state = d.state as Session['state']; if (d.runId) s.runId = d.runId as string; if(d.parentEndState)s.parentEndState=d.parentEndState as Session['state'];if(d.state==='accepted'){s.parentEndState=undefined;s.writeRoots=[];} }
-  if (e.type === 'model.confirmed') { s.model = d.model as Session['model']; s.nextModel = undefined; }
+  if (e.type === 'model.confirmed' && d.model) { s.model = d.model as Session['model']; if(s.nextModel?.providerId===s.model?.providerId&&s.nextModel?.modelId===s.model?.modelId)s.nextModel = undefined; }
   if (e.type === 'tool.updated') { const t = d as unknown as Session['tools'][number]; const n = s.tools.findIndex(v=>v.id===t.id); if (n < 0) s.tools.push(t); else s.tools[n] = {...s.tools[n],...t}; }
   if (e.type === 'agent.updated') { const a = d as unknown as Session['agents'][number]; const n=s.agents.findIndex(v=>v.id===a.id); if(n<0)s.agents.push(a); else s.agents[n]={...s.agents[n],...a}; }
   if (e.type === 'interaction.created') { const i=d as unknown as Interaction;const n=s.interactions.findIndex(v=>v.id===i.id);if(n<0)s.interactions.push(i);else s.interactions[n]={...s.interactions[n],...i}; }

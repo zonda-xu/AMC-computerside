@@ -1,4 +1,3 @@
-// Wire contract pinned to deepseek-harness fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159.
 export function turnState(reason){
   switch(reason.kind){case'completed':case'max-tokens':return'completed';case'aborted':return'cancelled';case'error':case'blocked':return'failed';case'interrupted':case'forked':return'uncertain';default:throw new Error(`Unknown DSH turn-end reason: ${reason.kind}`);}
 }

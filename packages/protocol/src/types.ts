@@ -6,6 +6,18 @@ export const ACTIVE: RunState[] = ['accepted', 'running', 'waiting_permission', 
 export interface SessionRef { hostId: string; workspaceId: string; runtimeInstanceId: string; engineId: EngineId; nativeSessionId: string }
 export interface ModelIdentity { providerId: string; modelId: string; label: string }
 export interface Workspace { id: string; hostId: string; name: string; path: string; writeRoots: string[] }
+export interface WorkspaceCreateRequest { clientRequestId: string; rootId: string; directoryName: string; name: string }
+export interface ExternalSource { namespace: string; nativeId: string; generation: string; profile: string; readOnly: boolean }
+export interface ExternalCapability { state: 'supported' | 'unsupported' | 'unverified'; reason: string }
+export interface ExternalProfile {
+  engineId: EngineId; version: string; profile: string; namespace: string; coverage: string; syncMode: string;
+  discover: ExternalCapability; history: ExternalCapability; observe: ExternalCapability;
+  continueManaged: ExternalCapability; submit: ExternalCapability; approve: ExternalCapability;
+  answer: ExternalCapability; cancel: ExternalCapability; configure: ExternalCapability; stopVerification: ExternalCapability;
+}
+export interface ExternalCandidate { candidateId: string; engineId: EngineId; workspaceId: string; title: string; cwd: string; source: ExternalSource }
+export interface ExternalMessage { nativeEventId: string; role: 'user' | 'assistant' | 'reasoning'; text: string }
+export interface ExternalPage { items: ExternalMessage[]; cursor?: string }
 export interface Message { id: string; role: 'user' | 'assistant' | 'reasoning'; text: string; complete: boolean; model?: ModelIdentity; startSeq?:number; nativeKey?:string }
 export interface ToolState { id: string; title: string; status: string; detail: string }
 export interface AgentState { id: string; title: string; state: string; detail: string }
@@ -25,6 +37,7 @@ export interface Session {
   model?: ModelIdentity; nextModel?: ModelIdentity; runId?: string;
   messages: Message[]; tools: ToolState[]; agents: AgentState[]; interactions: Interaction[];
   watermark: number; updatedAt: number; historyStart: number; nativeCursor?:number; parentEndState?:RunState; writeRoots?:string[]; grantedRoots?:string[];
+  externalSource?: ExternalSource;
 }
 export type EventType = 'message.delta' | 'message.completed' | 'tool.updated' | 'agent.updated' | 'run.updated' | 'interaction.created' | 'interaction.closed' | 'model.confirmed' | 'error';
 export interface ConsoleEvent { ref: SessionRef; sessionId: string; seq: number; time: number; type: EventType; data: Record<string, unknown> }

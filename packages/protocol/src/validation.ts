@@ -1,6 +1,6 @@
 import { Ajv } from 'ajv';
 import { ENGINES } from './types.ts';
-import type { Command } from './types.ts';
+import type { Command, WorkspaceCreateRequest } from './types.ts';
 export class Fault extends Error {
   status: number; code: string;
   constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; }
@@ -16,6 +16,17 @@ export const commandSchema = {
   properties: { protocolVersion: { const: 1 }, hostId: id, clientRequestId: id, sessionId: id, ref: refSchema, action: { enum: ['submit','cancel','decide','configure'] }, payload: { type: 'object' } }
 };
 export const validateCommand = new Ajv({ allErrors: true }).compile<Command>(commandSchema);
+export const workspaceCreateSchema = {
+  type: 'object', additionalProperties: false,
+  required: ['clientRequestId','rootId','directoryName','name'],
+  properties: {
+    clientRequestId: { type: 'string', minLength: 1, maxLength: 100, pattern: '^[A-Za-z0-9_.:-]+$' },
+    rootId: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    directoryName: { type: 'string', minLength: 1, maxLength: 100 },
+    name: { type: 'string', minLength: 1, maxLength: 100, pattern: '\\S' }
+  }
+};
+export const validateWorkspaceCreate = new Ajv({ allErrors: true }).compile<WorkspaceCreateRequest>(workspaceCreateSchema);
 export function object(value: unknown): Record<string, unknown> {
   requireValue(value !== null && typeof value === 'object' && !Array.isArray(value), 'invalid_object', 'Expected JSON object');
   return value as Record<string, unknown>;

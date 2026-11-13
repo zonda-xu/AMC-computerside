@@ -24,4 +24,3 @@ export async function fixture(hostId='test-host'){
 }
 export function command(s:Session,action='submit',payload:Record<string,unknown>={text:'Update README',attachmentIds:[]}):Command{return{protocolVersion:1,hostId:s.ref.hostId,clientRequestId:randomUUID(),sessionId:s.id,ref:s.ref,action:action as Command['action'],payload};}
 export const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
-

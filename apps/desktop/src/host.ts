@@ -60,7 +60,12 @@ export async function probeRuntime(engine: EngineId, command: string) {
     });
     const version = stdout.trim();
     if (!version) throw new Error('empty version');
-    return { engine, command: command.trim(), installed: true, version, detail: '已读取版本；请先在电脑完成官方登录，手机首次任务仍需验证。' };
+    let detail = '已读取版本；请先在电脑完成官方登录，手机首次任务仍需验证。';
+    if (engine === 'codex') detail = ['codex-cli 0.167.0-alpha.4.1', 'codex-cli 0.167.1'].includes(version)
+      ? '版本有精确外部历史协议依据；网关固定完整版本后可只读发现/导入/手动刷新，不代表原终端控制或实机验收。'
+      : '已安装，但此版本没有核验的外部历史 profile；不会按相近版本开放接入。';
+    if (engine === 'deepseek-harness') detail = 'CLI 已安装不等于宿主 API 已验证。需要同宿主 bridge v2 对官方 rc.5 controller 文件摘要和加载实例握手；当前只读历史，受管创建/发送/审批禁用。';
+    return { engine, command: command.trim(), installed: true, version, detail };
   } catch {
     return { engine, command: command.trim(), installed: false, version: '', detail: '无法运行此程序的 --version。请检查安装、路径或执行权限，再重新检测。' };
   }

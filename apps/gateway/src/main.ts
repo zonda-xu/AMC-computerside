@@ -9,9 +9,11 @@ import { Core } from './core.ts';
 import { makeServer } from './server.ts';
 import { canonical } from './files.ts';
 import { CodexAdapter } from '../../../packages/adapters/codex/index.ts';
+import { CodexExternalProvider } from '../../../packages/adapters/codex/external.ts';
 import { ClaudeCodeAdapter } from '../../../packages/adapters/claude-code/index.ts';
 import { OpenCodeAdapter } from '../../../packages/adapters/opencode/index.ts';
 import { DshAdapter } from '../../../packages/adapters/deepseek-harness/index.ts';
+import { DshExternalProvider } from '../../../packages/adapters/deepseek-harness/external.ts';
 import type { RuntimeConfig } from '../../../packages/adapters/common/base.ts';
 import type { EngineId } from '../../../packages/protocol/src/types.ts';
 export interface HostConfig { hostId:string;name:string;os:string;listen:string;port:number;publicEndpoint:string;dataDir:string;caFile:string;certFile:string;keyFile:string;allowedWorkspaceRoots:string[];runtimes:Record<EngineId,RuntimeConfig> }
@@ -25,10 +27,12 @@ const lock=await open(lockPath,'wx',0o600);await lock.writeFile(JSON.stringify({
 await mkdir(c.dataDir,{recursive:true,mode:0o700});
 const store=new Store(join(c.dataDir,'console.sqlite'));store.recover();
 const core=new Core(store,c.hostId,await Promise.all(c.allowedWorkspaceRoots.map(canonical)));
-core.adapters.set('codex',new CodexAdapter('codex',c.runtimes.codex,core.context('codex')));
+const codex=new CodexAdapter('codex',c.runtimes.codex,core.context('codex'));core.adapters.set('codex',codex);
+core.external.providers.set('codex',new CodexExternalProvider(codex));
 core.adapters.set('claude-code',new ClaudeCodeAdapter('claude-code',c.runtimes['claude-code'],core.context('claude-code')));
 core.adapters.set('opencode',new OpenCodeAdapter('opencode',c.runtimes.opencode,core.context('opencode')));
 const dsh=new DshAdapter('deepseek-harness',c.runtimes['deepseek-harness'],core.context('deepseek-harness'));core.adapters.set('deepseek-harness',dsh);
+core.external.providers.set('deepseek-harness',new DshExternalProvider(dsh));
 const server=makeServer(core,{cert:await readFile(c.certFile),key:await readFile(c.keyFile),minVersion:'TLSv1.2'},{name:c.name,os:c.os});
 const bridgeToken=(await readFile(c.runtimes['deepseek-harness'].bridgeTokenFile!,'utf8')).trim();
 const bridgeHTTP=createServer((_req,res)=>res.writeHead(404).end());const bridgeWS=new WebSocketServer({noServer:true,maxPayload:8*1024*1024});

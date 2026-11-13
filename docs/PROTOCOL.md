@@ -44,3 +44,28 @@ WSS `/v1/events` 使用相同认证头。客户端发：
 事件种类：message.delta / message.completed、tool.updated、agent.updated、run.updated、interaction.created / closed、model.confirmed、error。最终消息与增量使用同一 ID，最终文本替换增量。待决交互、确认模型和 epoch 属于快照内容。interaction.created 按交互 ID 插入或更新状态，决定被占有时变为 responding。
 
 目前保留全部网关事件，不实施静默日志裁剪。手机默认只取窗口，旧消息和事件可分页读取。将来引入保留策略前须增加明确的游标过期协议。
+
+## Authorized Directory Creation And External Sources
+
+These additive v1 endpoints require the existing host identity header and device authentication. An old gateway returns 404; the phone does not substitute unrestricted paths or change pairing.
+
+| Method And Path | Request / Result |
+|---|---|
+| GET /v1/workspace-roots | `items: [{rootId,name,canCreate,reason}]`; no remote disk browser |
+| POST /v1/workspaces/create | `{clientRequestId,rootId,directoryName,name}`; returns the registered Workspace |
+| GET /v1/workspace-operations/:requestId | This device's durable directory operation stage, detail and optional workspace ID |
+| GET /v1/external-capabilities | Four independent profiles, including per-action supported/unsupported/unverified and reasons |
+| GET /v1/external-sessions?workspaceId=...&engineId=...&cursor=... | At most 50 native candidates per implemented provider page, filtered to the registered canonical cwd |
+| GET /v1/external-sessions/:candidateId/history?cursor=... | Validated, bounded read-only message content; opaque candidate ID only |
+| POST /v1/external-sessions/:candidateId/import | `{clientRequestId}`; idempotent read-only projection, initially without history |
+| POST /v1/sessions/:id/observation | `{cursor?}`; one explicit passive history refresh/page, returns `{snapshot,cursor?}` |
+| POST /v1/sessions/:id/handoffs | Currently rejects with `handoff_unverified`; no verified original-writer/exclusive-control evidence |
+| POST /v1/sessions/:id/control-leases | Currently rejects with `handoff_unverified`; no leases are issued |
+
+Directory operations are keyed by device and request ID, with a parameter hash and persisted `prepared`, `created`, `done`, `failed` or `needs_review` stage. A crash before ownership proof is durable cannot automatically adopt or delete a directory. A proven `created` operation can finish registration if parent and target identity still match. A `done` retry returns the same workspace. Existing directories and overlapping workspaces are never adopted. The portable name policy is stricter than POSIX and rejects Windows device aliases, separators, ADS and trailing dot/space. The JSON schema is `packages/protocol/schema/workspace-create.schema.json`; additional properties are rejected.
+
+External identity binds host, engine, source namespace/instance, native ID and profile. Source identity is separate from the adapter's managed runtime identity. Imported source messages have durable source-key/content deduplication and independent gateway sequence numbers. History imports only text; no run termination, model confirmation, tool execution, pending approval or directory-lock release is replayed. Changed final text replaces the same projected message. DSH history is explicitly a journal view, not reconstruction of the current compacted model-visible surface.
+
+`externalSource` marks imported sessions. Both command acceptance and dispatch reject all mutations, including calls through the old command endpoint. The reconcile endpoint also rejects imported sessions rather than invoking native resume. This release does **not** implement lease issuance, renew/revoke, controlEpoch dispatch, native handoff or original-process continuation. Those remain blocked, not simulated by a client checkbox or a successful resume. Existing managed sessions retain their previous authorization path. New managed sessions use POST /v1/sessions and are separate native conversations, not external continuation.
+
+WSS now emits host-scoped `catalog.changed` after workspace registration/creation, managed session creation and external import. The phone coalesces bootstrap refreshes, preserves loaded messages, resubscribes, checks connection generation and cleans scheduled work on background/disposal. Manual observation adds no background polling or lease renewal.
