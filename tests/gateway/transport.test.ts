@@ -8,6 +8,9 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { makeServer } from '../../apps/gateway/src/server.ts';
 import { fixture, command, tick } from '../helpers.ts';
+import { automationSettings } from '../../apps/gateway/src/automation.ts';
+import { WorkspaceDiscovery } from '../../apps/gateway/src/workspace-discovery.ts';
+import { ExternalSync } from '../../apps/gateway/src/external-sync.ts';
 async function certificates(dir:string){const key=join(dir,'key.pem'),crt=join(dir,'cert.pem');await promisify(execFile)('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',crt,'-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost']);return{key:await readFile(key),cert:await readFile(crt)};}
 test('HTTPS pairing, WSS snapshot cut, offline execution and device revocation',async()=>{
   const f=await fixture();const tls=await certificates(f.dir);const server=makeServer(f.core,tls,{name:'Test Host',os:'test'});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const address=server.address();if(!address||typeof address==='string')throw new Error('No test server');const port=address.port;
@@ -16,9 +19,15 @@ test('HTTPS pairing, WSS snapshot cut, offline execution and device revocation',
   const connect=(token:string)=>new Promise<WebSocket>((resolve,reject)=>{const ws=new WebSocket(`wss://localhost:${port}/v1/events`,{ca:tls.cert,headers:{'X-AMC-Host':'test-host',Authorization:'Bearer '+token}});sockets.push(ws);ws.once('open',()=>resolve(ws));ws.once('error',reject);});
   try{
     assert.equal((await req('/v1/bootstrap')).status,401);
-    for(const path of ['/v1/workspace-roots','/v1/external-capabilities','/v1/external-sessions'])assert.equal((await req(path)).status,401);
+    for(const path of ['/v1/workspace-roots','/v1/external-capabilities','/v1/external-sessions','/v1/automation','/v1/push/status'])assert.equal((await req(path)).status,401);
     assert.equal((await req('/v1/workspaces/create','POST',{})).status,401);
     const t=f.store.ticket();const paired=await req('/v1/pair','POST',{hostId:'test-host',ticket:t.token,deviceName:'Test Phone'});assert.equal(paired.status,200);const token=paired.data.token;
+    const defaults=await req('/v1/automation','GET',undefined,token);assert.equal(defaults.status,200);assert.equal(defaults.data.enabled,false);assert.equal(defaults.data.limited,false);assert.equal(defaults.data.scanIntervalSeconds,60);assert.deepEqual(defaults.data.roots,f.core.allowedRoots);
+    const pushStatus=await req('/v1/push/status','GET',undefined,token);assert.deepEqual(pushStatus.data,{configured:false,state:'unconfigured'});
+    const settings=automationSettings({enabled:true});const discovery=new WorkspaceDiscovery(f.core,settings);const externalSync=new ExternalSync(f.core,settings,{});
+    f.core.automation={settings,discovery,externalSync};discovery.status={state:'partial',checked:1000,added:1,errors:['Discovery budget exhausted: private provider credentials'],finishedAt:1234};
+    externalSync.statuses.set('fixture',{workspaceId:f.w.id,engineId:'codex',state:'failed',failures:1,nextAt:5000,lastSuccessAt:1200,error:'secret native failure'});
+    const automation=await req('/v1/automation','GET',undefined,token);assert.equal(automation.data.enabled,true);assert.equal(automation.data.limited,true);assert.equal(automation.data.lastFailureAt,1234);assert.equal(automation.data.lastSuccessAt,1200);assert.equal(automation.data.lastFailureCode,'automation_budget');assert.ok(!JSON.stringify(automation.data).includes('secret'));assert.ok(!JSON.stringify(automation.data).includes('credentials'));
     assert.equal((await req('/v1/bootstrap','GET',undefined,token,'wrong-host')).status,409);
     await assert.rejects(()=>req('/v1/hello','GET',undefined,'','test-host','wrong.invalid'));
     const ws=await connect(token);const frames:any[]=[];ws.on('message',raw=>frames.push(JSON.parse(raw.toString()).data));ws.send(JSON.stringify({type:'subscribe',hostId:'test-host',sessionIds:[f.s.id]}));

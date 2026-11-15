@@ -14,7 +14,13 @@ export class Store {
       CREATE TABLE IF NOT EXISTS tickets(hash TEXT PRIMARY KEY,expires INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,name TEXT NOT NULL,hash TEXT NOT NULL UNIQUE,revoked INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS commands(device TEXT NOT NULL,id TEXT NOT NULL,hash TEXT NOT NULL,json TEXT NOT NULL,PRIMARY KEY(device,id));
-      CREATE TABLE IF NOT EXISTS events(session TEXT NOT NULL,seq INTEGER NOT NULL,json TEXT NOT NULL,PRIMARY KEY(session,seq));`);
+      CREATE TABLE IF NOT EXISTS events(session TEXT NOT NULL,seq INTEGER NOT NULL,json TEXT NOT NULL,PRIMARY KEY(session,seq));
+      CREATE TABLE IF NOT EXISTS push_bindings(device TEXT PRIMARY KEY REFERENCES devices(id),token TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,revision TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS push_baselines(session TEXT PRIMARY KEY,source TEXT NOT NULL,watermark INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS push_jobs(id TEXT PRIMARY KEY,device TEXT NOT NULL,revision TEXT NOT NULL,session TEXT NOT NULL,event TEXT NOT NULL,status TEXT NOT NULL,created INTEGER NOT NULL,due INTEGER NOT NULL,expires INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,lease TEXT,lease_until INTEGER);
+      CREATE INDEX IF NOT EXISTS push_jobs_due ON push_jobs(status,due);
+      CREATE INDEX IF NOT EXISTS push_jobs_group ON push_jobs(device,session,status,created);
+      CREATE TABLE IF NOT EXISTS push_intents(id TEXT PRIMARY KEY,job TEXT NOT NULL REFERENCES push_jobs(id));`);
   }
   transaction<T>(fn: () => T): T {
     this.db.exec('BEGIN IMMEDIATE');
@@ -40,7 +46,8 @@ export class Store {
   }
   authenticate(token: string): string { const r = this.db.prepare('SELECT id FROM devices WHERE hash=? AND revoked=0').get(digest(token)); requireValue(r,'unauthorized','Device authorization required',401); return r.id as string; }
   devices() { return this.db.prepare('SELECT id,name,revoked FROM devices').all(); }
-  revoke(id: string) { this.db.prepare('UPDATE devices SET revoked=1 WHERE id=?').run(id); }
+  revoke(id: string) { this.transaction(() => { this.db.prepare('UPDATE devices SET revoked=1 WHERE id=?').run(id); this.clearPush(id); }); }
+  clearPush(id: string) { this.db.prepare('DELETE FROM push_bindings WHERE device=?').run(id); this.db.prepare("UPDATE push_jobs SET status='cancelled',lease=NULL WHERE device=? AND status IN ('pending','sending')").run(id); }
   receive(device: string, id: string, request: unknown): { fresh: boolean; receipt: Receipt } {
     return this.transaction(() => {
       const hash = digest(stable(request));

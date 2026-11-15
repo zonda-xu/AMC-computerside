@@ -1,5 +1,7 @@
 # 电脑连接助手
 
+v0.3.0 已适配新版手机的自动同步与通知状态接口。自动化默认关闭；启用方式见 [自动同步与通知](automatic-sync-and-push.md)，旧项目身份确认见 [目录身份确认](workspace-identity-confirmation.md)。ZIP 用户可在包内 docs 目录找到这两份文档。官方 Push 发送器当前未配置，绑定成功不代表手机会收到通知。
+
 Windows、macOS、Linux 分别提供独立包。包内只有浏览器向导、电脑网关、协议适配器、DSH 插件和运行所需的 JavaScript 依赖，不包含 HarmonyOS 工程、人物素材、手机构建缓存或个人凭据。
 
 ## 第一次启动

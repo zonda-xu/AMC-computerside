@@ -1,5 +1,7 @@
 # 主机接入
 
+v0.3.0 增加可选自动目录发现与外部会话只读同步，默认关闭。启用配置、状态接口和当前 Push 发送限制见 [自动同步与通知](automatic-sync-and-push.md)；已有目录自动化迁移见 [目录身份确认](workspace-identity-confirmation.md)。目录确认前必须先停止网关。
+
 推荐使用新的 [电脑连接助手](DESKTOP_GUIDE.md)，通过界面完成独立配置、检测、启动和扫码配对。下文保留原有 CLI 与固定 EasyTier 中转部署方式。
 
 ## 每台主机的独立配置

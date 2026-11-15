@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   test:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +37,7 @@ jobs:
       - run: npm test
 
   release:
+    timeout-minutes: 15
     needs: test
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest

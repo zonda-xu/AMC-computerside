@@ -7,9 +7,11 @@ import { MAX_FILE, listProject, projectDiff, readProject, upload } from './files
 import type { ConsoleEvent, EngineId, ModelIdentity, Session, Workspace } from '../../../packages/protocol/src/types.ts';
 import { digest } from './store.ts';
 import { basename } from 'node:path';
+import { PushCoordinator } from './push.ts';
+import { automationStatus } from './automation-status.ts';
 export function snapshotWindow(s:Session):Session{return{...s,messages:s.messages.slice(-100),tools:s.tools.slice(-100),historyStart:s.messages.length>100?s.messages.at(-100)!.startSeq||1:1};}
 export async function jsonBody(req:IncomingMessage,max=24*1024*1024){let length=0;const chunks:Buffer[]=[];for await(const c of req){length+=c.length;requireValue(length<=max,'body_large','Request exceeds limit',413);chunks.push(c);}try{return object(JSON.parse(Buffer.concat(chunks).toString('utf8')));}catch(e){if(e instanceof Fault)throw e;throw new Fault(400,'invalid_json','Invalid JSON body');}}
-export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:string}){
+export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:string},push=new PushCoordinator(core.store,core.hostId)){
   const peers=new Map<WebSocket,{device:string; sessions:Set<string>}>();const rate=new Map<string,{since:number;count:number}>();
   const envelope=(data:unknown)=>({protocolVersion:1,hostId:core.hostId,data});
   function send(ws:WebSocket,value:unknown){if(ws.readyState!==WebSocket.OPEN)return;if(ws.bufferedAmount>1024*1024){ws.close(1013,'Reconnect for snapshot');return;}ws.send(JSON.stringify(envelope(value)));}
@@ -25,6 +27,13 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
         const p=await jsonBody(req,32_768);requireValue(p.hostId===core.hostId,'host_mismatch','Pairing targets another host',409);reply({...core.store.redeem(string(p.ticket,'ticket',200),string(p.deviceName,'deviceName',100)),...about});return;
       }
       const device=auth(req);
+      if(path==='/v1/automation'&&req.method==='GET'){reply(automationStatus(core));return;}
+      if(path==='/v1/push/status'&&req.method==='GET'){const status=push.status();reply({configured:status.state!=='unconfigured',state:status.state});return;}
+      if(path==='/v1/devices/self/push'){
+        if(req.method==='GET'){reply(push.binding(device));return;}
+        if(req.method==='PUT'){const p=await jsonBody(req,8192);requireValue(Object.keys(p).length===1&&Object.hasOwn(p,'token'),'invalid_field','Expected only token');reply(push.bind(device,p.token));return;}
+        if(req.method==='DELETE'){reply(push.unbind(device));return;}
+      }
       if(path==='/v1/workspace-roots'&&req.method==='GET'){reply({items:await core.workspaceCreator.roots()});return;}
       if(path==='/v1/workspaces/create'&&req.method==='POST'){const p=await jsonBody(req,32_768);requireValue(validateWorkspaceCreate(p),'invalid_field','Invalid directory creation request');reply(await core.workspaceCreator.create(device,p.clientRequestId,p.rootId,p.directoryName,p.name));return;}
       const directoryOperation=path.match(/^\/v1\/workspace-operations\/([A-Za-z0-9_.:-]+)$/);

@@ -9,6 +9,7 @@ import { nativeCommand } from '../../../packages/adapters/common/command.ts';
 import { nativeEnvironment } from '../../../packages/adapters/common/rpc.ts';
 import type { RuntimeConfig } from '../../../packages/adapters/common/base.ts';
 import type { EngineId } from '../../../packages/protocol/src/types.ts';
+import { automationSettings, type AutomationConfig } from '../../gateway/src/automation.ts';
 
 export const engines: EngineId[] = ['codex', 'claude-code', 'opencode', 'deepseek-harness'];
 export const commands = { codex: 'codex', 'claude-code': 'claude', opencode: 'opencode', 'deepseek-harness': 'dsh' };
@@ -22,10 +23,12 @@ export interface HostConfig {
   hostId: string; name: string; os: string; listen: string; port: number; publicEndpoint: string;
   dataDir: string; caFile: string; certFile: string; keyFile: string;
   allowedWorkspaceRoots: string[]; runtimes: Record<EngineId, RuntimeConfig>;
+  automation?: AutomationConfig;
 }
 export interface SetupInput {
   name: string; mode: 'lan' | 'relay'; address: string; publicHost?: string;
   workspace: string; runtimes: Partial<Record<EngineId, { command: string; enabled: boolean }>>;
+  automation?: AutomationConfig;
 }
 const run = promisify(execFile);
 export function addresses() {
@@ -85,6 +88,7 @@ export async function validateInput(input: SetupInput, available = addresses()) 
 }
 export async function saveHost(root: string, input: SetupInput) {
   const workspace = await validateInput(input);
+  if (input.automation !== undefined) automationSettings(input.automation);
   const ssl = await opensslCommand();
   const previous = await readConfig(root);
   const enabled = await Promise.all(engines.filter(id => input.runtimes[id]?.enabled).map(async id => {
@@ -115,9 +119,9 @@ export async function saveHost(root: string, input: SetupInput) {
     return [id, { command: result?.command || commands[id], expectedVersion: result?.version || 'DISABLED', enabled: !!result,
       models: previous?.runtimes[id]?.models || [], ...(id === 'deepseek-harness' ? { bridgeTokenFile } : {}) }];
   })) as Record<EngineId, RuntimeConfig>;
-  const config: HostConfig = { hostId, name: input.name.trim(), os: platform(), listen: input.address, port: 8899,
+  const config: HostConfig = { ...previous, hostId, name: input.name.trim(), os: platform(), listen: input.address, port: 8899,
     publicEndpoint: `https://${target}:${input.mode === 'relay' ? system.publicPort : 8899}`, dataDir: root,
-    caFile, certFile, keyFile, allowedWorkspaceRoots: [workspace], runtimes };
+    caFile, certFile, keyFile, allowedWorkspaceRoots: [workspace], runtimes, automation: automationSettings(input.automation ?? previous?.automation) };
   const temporary = join(root, `config-${randomUUID()}.tmp`);
   await writeFile(temporary, JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   await rename(temporary, join(root, 'host.config.json'));

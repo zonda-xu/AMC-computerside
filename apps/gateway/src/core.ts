@@ -1,4 +1,4 @@
-import { EventEmitter } from 'node:events';
+import { captureRejectionSymbol, EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import type { AdapterContext, AgentAdapter, Attachment, Command, Decision, EngineId, ModelIdentity, Receipt, Session, Workspace } from '../../../packages/protocol/src/types.ts';
@@ -8,14 +8,28 @@ import { Store, digest } from './store.ts';
 import { canonical, inside, overlaps, readProject, MAX_FILE } from './files.ts';
 import { WorkspaceCreator } from './workspace-create.ts';
 import { ExternalSessions } from './external.ts';
+import type { AutomationSettings } from './automation.ts';
+import type { WorkspaceDiscovery } from './workspace-discovery.ts';
+import type { ExternalSync } from './external-sync.ts';
+import { WorkspaceIdentities } from './workspace-identity.ts';
 export class Core extends EventEmitter {
   store:Store;hostId:string;allowedRoots:string[];adapters=new Map<EngineId,AgentAdapter>();
   private inFlight=new Set<Promise<void>>();
   workspaceCreator=new WorkspaceCreator(this);
   external=new ExternalSessions(this);
-  constructor(store:Store,hostId:string,allowedRoots:string[]){super();this.store=store;this.hostId=hostId;this.allowedRoots=allowedRoots;}
+  workspaceIdentities=new WorkspaceIdentities(this);
+  automation?:{settings:AutomationSettings;discovery:WorkspaceDiscovery;externalSync:ExternalSync};
+  lastListenerFailure?:{code:'listener_failed';at:number};
+  constructor(store:Store,hostId:string,allowedRoots:string[]){super({captureRejections:true});this.store=store;this.hostId=hostId;this.allowedRoots=allowedRoots;}
+  [captureRejectionSymbol](){this.lastListenerFailure={code:'listener_failed',at:Date.now()};}
+  emitAutomation(type:string,value:unknown,onFailure:()=>void){
+    const failed=()=>{try{onFailure();}catch{}};
+    for(const listener of this.rawListeners(type)){
+      try{void Promise.resolve(listener.call(this,value)).catch(failed);}catch{failed();}
+    }
+  }
   session(id:string){const s=this.store.get<Session>('session',id);requireValue(s,'session_missing','Session not found',404);return s;}
-  workspace(id:string){const w=this.store.get<Workspace>('workspace',id);requireValue(w,'workspace_missing','Project not found',404);for(const root of [w.path,...w.writeRoots])requireValue(this.allowedRoots.some(base=>inside(base,root)),'root_not_granted','Project is outside current host-configured workspace roots',403);return w;}
+  workspace(id:string){const w=this.store.get<Workspace>('workspace',id);requireValue(w,'workspace_missing','Project not found',404);for(const root of [w.path,...w.writeRoots])requireValue(this.allowedRoots.some(base=>inside(base,root)),'root_not_granted','Project is outside current host-configured workspace roots',403);this.workspaceIdentities.verify(id);return w;}
   context(engineId:EngineId):AdapterContext{
     let runtime=this.store.get<{id:string;epoch:number}>('runtime',engineId);if(!runtime){runtime={id:randomUUID(),epoch:0};this.store.put('runtime',engineId,runtime);}
     return{runtimeInstanceId:runtime.id,epoch:runtime.epoch,
@@ -50,6 +64,17 @@ export class Core extends EventEmitter {
     const all=this.store.list<Workspace>('workspace');
     for(const w of all)requireValue(!w.writeRoots.some(a=>roots.some(b=>overlaps(a,b))),'overlapping_project','Managed project roots overlap',409);
     const w:Workspace={id:randomUUID(),hostId:this.hostId,name,path:actual,writeRoots:[...new Set(roots)]};this.store.put('workspace',w.id,w);this.emit('catalog.changed');return w;
+  }
+  async ensureWorkspace(path:string,name:string,validate?:()=>Promise<void>,notify=true,automaticRoot?:string){
+    const actual=await canonical(path);
+    if(validate)await validate();
+    requireValue(this.allowedRoots.some(base=>inside(base,actual)),'root_not_granted','Project is outside host-configured workspace roots',403);
+    const all=this.store.list<Workspace>('workspace');
+    const previous=all.find(w=>w.path===actual);
+    if(previous){this.workspace(previous.id);if(automaticRoot)this.workspaceIdentities.verify(previous.id,true);return previous;}
+    for(const w of all)requireValue(![w.path,...w.writeRoots].some(root=>overlaps(root,actual)),'overlapping_project','Managed project roots overlap',409);
+    const w:Workspace={id:randomUUID(),hostId:this.hostId,name,path:actual,writeRoots:[actual]};
+    this.store.transaction(()=>{if(automaticRoot)this.workspaceIdentities.bindNew(w,automaticRoot);this.store.put('workspace',w.id,w);});if(notify)this.emit('catalog.changed');return w;
   }
   async createSession(device:string,requestId:string,wid:string,engineId:EngineId,model?:ModelIdentity){
     requireValue(ENGINES.includes(engineId),'engine_invalid','Unknown runtime');const w=this.workspace(wid);const adapter=this.adapters.get(engineId);
