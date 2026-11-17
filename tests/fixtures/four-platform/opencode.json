@@ -1,0 +1,41 @@
+{
+  "fixtureVersion": 1,
+  "engine": "opencode",
+  "version": "client-2.3.0-cli-2.3.0",
+  "provenance": "synthetic-plan-appendix-C-F",
+  "nativeVerified": false,
+  "sessionId": "ses_offline1",
+  "runId": "msg_offline1",
+  "create": {
+    "request": { "method": "POST", "path": "/api/session", "body": { "title": "Offline contract", "location": { "directory": "/srv/work/offline" } } },
+    "response": { "status": 200, "body": { "data": { "id": "ses_offline1", "projectID": "project_offline", "title": "Offline contract", "time": { "created": 1794787200000, "updated": 1794787200000 }, "location": { "directory": "/srv/work/offline" } } } }
+  },
+  "submit": {
+    "request": { "method": "POST", "path": "/api/session/ses_offline1/prompt", "body": { "text": "Run controlled tests.", "delivery": "queue" } },
+    "response": { "status": 200, "body": { "data": { "id": "msg_offline1", "sessionID": "ses_offline1", "time": { "created": 1794787200000 }, "type": "user", "payload": { "text": "Run controlled tests." }, "delivery": "queue" } } }
+  },
+  "events": [
+    { "id": "evt-1", "created": 1794787200001, "type": "session.execution.started", "data": { "sessionID": "ses_offline1" } },
+    { "id": "evt-2", "created": 1794787200002, "type": "session.text.delta", "data": { "sessionID": "ses_offline1", "assistantMessageID": "msg_assistant1", "ordinal": 0, "delta": "Tests " } },
+    { "id": "evt-3", "created": 1794787200003, "type": "session.tool.called", "data": { "sessionID": "ses_offline1", "assistantMessageID": "msg_assistant1", "id": "tool-1", "input": { "command": "node --test" }, "executed": true } },
+    { "id": "evt-4", "created": 1794787200004, "type": "session.tool.success", "data": { "sessionID": "ses_offline1", "assistantMessageID": "msg_assistant1", "id": "tool-1", "content": "1 test passed", "executed": true } },
+    { "id": "evt-5", "created": 1794787200005, "type": "session.text.ended", "data": { "sessionID": "ses_offline1", "assistantMessageID": "msg_assistant1", "ordinal": 0, "text": "Tests passed." } },
+    { "id": "evt-6", "created": 1794787200006, "type": "session.execution.succeeded", "data": { "sessionID": "ses_offline1" } }
+  ],
+  "approvals": [
+    { "event": { "id": "evt-permission-1", "created": 1794787200002, "type": "permission.asked", "data": { "id": "permission-1", "sessionID": "ses_offline1", "action": "execute", "resources": ["node --test"] } }, "request": { "method": "POST", "path": "/api/session/ses_offline1/permission/permission-1/reply", "body": { "decision": "once" } }, "response": { "status": 204 } },
+    { "event": { "id": "evt-permission-2", "created": 1794787200002, "type": "permission.asked", "data": { "id": "permission-2", "sessionID": "ses_offline1", "action": "execute", "resources": ["rm protected.txt"] } }, "request": { "method": "POST", "path": "/api/session/ses_offline1/permission/permission-2/reply", "body": { "decision": "reject", "message": "User declined" } }, "response": { "status": 204 } }
+  ],
+  "question": {
+    "form": { "id": "form-1", "sessionID": "ses_offline1", "title": "Test settings", "fields": [{ "key": "test_scope", "type": "string", "title": "Scope", "required": true, "options": [{ "value": "all", "label": "All tests" }, { "value": "unit", "label": "Unit tests" }] }, { "key": "include_integration", "type": "boolean", "required": true }, { "key": "retries", "type": "integer", "minimum": 0, "maximum": 3, "required": true }] },
+    "request": { "method": "POST", "path": "/api/session/ses_offline1/form/form-1/reply", "body": { "answer": { "test_scope": "all", "include_integration": true, "retries": 1 } } },
+    "response": { "status": 204 }
+  },
+  "cancelRace": {
+    "request": { "method": "POST", "path": "/api/session/ses_offline1/interrupt?resume=false" },
+    "terminalBeforeResponse": { "id": "evt-6", "created": 1794787200006, "type": "session.execution.succeeded", "data": { "sessionID": "ses_offline1" } },
+    "response": { "status": 200, "body": { "interrupted": false } }
+  },
+  "continuation": { "request": { "method": "POST", "path": "/api/session/ses_offline1/prompt", "body": { "text": "Explain the previous result.", "delivery": "queue" } }, "response": { "status": 200, "body": { "data": { "id": "msg_offline2", "sessionID": "ses_offline1", "type": "user", "payload": { "text": "Explain the previous result." }, "time": { "created": 1794787200010 }, "delivery": "queue" } } } },
+  "recovery": { "ssePath": "/api/event", "supportsReplay": false, "requests": ["/api/session/ses_offline1", "/api/session/ses_offline1/message", "/api/session/ses_offline1/permission", "/api/session/ses_offline1/form"], "sessionResponse": { "data": { "id": "ses_offline1", "outcome": "succeeded", "time": { "created": 1794787200000, "updated": 1794787200006, "idle": 1794787200006 }, "location": { "directory": "/srv/work/offline" } } }, "pendingResponse": { "data": [] }, "secondStateRead": true }
+}

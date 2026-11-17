@@ -1,0 +1,40 @@
+{
+  "fixtureVersion": 1,
+  "engine": "codex",
+  "version": "rust-v0.169.0",
+  "provenance": "synthetic-plan-appendix-A-F",
+  "nativeVerified": false,
+  "sessionId": "thread-offline-1",
+  "runId": "turn-offline-1",
+  "create": {
+    "request": { "id": 2, "method": "thread/start", "params": { "cwd": "/srv/work/offline", "approvalPolicy": "on-request", "sandbox": "workspace-write" } },
+    "response": { "id": 2, "result": { "thread": { "id": "thread-offline-1" } } }
+  },
+  "submit": {
+    "request": { "id": 4, "method": "turn/start", "params": { "threadId": "thread-offline-1", "input": [{ "type": "text", "text": "Run controlled tests.", "text_elements": [] }] } },
+    "response": { "id": 4, "result": { "turn": { "id": "turn-offline-1", "status": "inProgress" } } }
+  },
+  "events": [
+    { "method": "turn/started", "params": { "threadId": "thread-offline-1", "turn": { "id": "turn-offline-1", "status": "inProgress" } } },
+    { "method": "item/agentMessage/delta", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "itemId": "assistant-1", "delta": "Tests " } },
+    { "method": "item/started", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "item": { "id": "tool-1", "type": "commandExecution", "command": "node --test", "cwd": "/srv/work/offline", "status": "inProgress" } } },
+    { "method": "item/completed", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "item": { "id": "tool-1", "type": "commandExecution", "command": "node --test", "cwd": "/srv/work/offline", "status": "completed", "exitCode": 0, "aggregatedOutput": "1 test passed" } } },
+    { "method": "item/completed", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "item": { "id": "assistant-1", "type": "agentMessage", "text": "Tests passed." } } },
+    { "method": "turn/completed", "params": { "threadId": "thread-offline-1", "turn": { "id": "turn-offline-1", "status": "completed", "error": null } } }
+  ],
+  "approvals": [
+    { "request": { "id": 101, "method": "item/commandExecution/requestApproval", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "itemId": "command-approval", "command": "node --test", "cwd": "/srv/work/offline", "reason": "Run tests" } }, "response": { "id": 101, "result": { "decision": "accept" } } },
+    { "request": { "id": "101", "method": "item/fileChange/requestApproval", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "itemId": "file-approval", "reason": "Update test fixture" } }, "response": { "id": "101", "result": { "decision": "decline" } } },
+    { "request": { "id": "extra-permissions", "method": "item/permissions/requestApproval", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "itemId": "permissions-1", "environmentId": null, "startedAtMs": 1794787200000, "cwd": "/srv/work/offline", "reason": "Read fixture", "permissions": { "network": null, "fileSystem": { "read": ["/srv/work/offline/fixture.json"], "write": null } } } }, "response": { "id": "extra-permissions", "result": { "permissions": { "fileSystem": { "read": ["/srv/work/offline/fixture.json"], "write": null } }, "scope": "turn" } } }
+  ],
+  "question": {
+    "request": { "id": "question-request", "method": "item/tool/requestUserInput", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1", "itemId": "question-item", "questions": [{ "id": "test_scope", "header": "Tests", "question": "Which tests?", "isOther": false, "isSecret": false, "options": [{ "label": "All", "description": "All tests" }, { "label": "Unit", "description": "Unit tests" }] }], "isBlocking": true, "autoResolutionMs": null } },
+    "response": { "id": "question-request", "result": { "answers": { "test_scope": { "answers": ["All"] } } } }
+  },
+  "cancelRace": {
+    "request": { "id": 5, "method": "turn/interrupt", "params": { "threadId": "thread-offline-1", "turnId": "turn-offline-1" } },
+    "terminalBeforeResponse": { "method": "turn/completed", "params": { "threadId": "thread-offline-1", "turn": { "id": "turn-offline-1", "status": "completed", "error": null } } },
+    "response": { "id": 5, "result": {} }
+  },
+  "continuation": { "request": { "id": 6, "method": "turn/start", "params": { "threadId": "thread-offline-1", "input": [{ "type": "text", "text": "Explain the previous result.", "text_elements": [] }] } }, "response": { "id": 6, "result": { "turn": { "id": "turn-offline-2", "status": "inProgress" } } } }
+}

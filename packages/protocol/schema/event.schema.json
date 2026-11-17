@@ -3,6 +3,11 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "protocolVersion",
+    "eventId",
+    "hostId",
+    "runtimeInstanceId",
+    "generation",
     "ref",
     "sessionId",
     "seq",
@@ -11,6 +16,13 @@
     "data"
   ],
   "properties": {
+    "protocolVersion": {"const": 2},
+    "eventId": {"type": "string", "minLength": 1},
+    "hostId": {"type": "string", "minLength": 1},
+    "runtimeInstanceId": {"type": "string", "minLength": 1},
+    "generation": {"type": "integer", "minimum": 0},
+    "runId": {"type": "string", "minLength": 1},
+    "nativeEventId": {"type": "string", "minLength": 1},
     "ref": {
       "type": "object",
       "additionalProperties": false,
@@ -79,7 +91,75 @@
       ]
     },
     "data": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "generation": {"type": "integer", "minimum": 0},
+        "runId": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"},
+        "nativeRunId": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S"},
+        "nativeEventId": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S"}
+      }
     }
+  },
+  "allOf": [
+    {"if": {"properties": {"type": {"const": "message.delta"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/message.delta"}}}},
+    {"if": {"properties": {"type": {"const": "message.completed"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/message.completed"}}}},
+    {"if": {"properties": {"type": {"const": "tool.updated"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/tool.updated"}}}},
+    {"if": {"properties": {"type": {"const": "agent.updated"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/agent.updated"}}}},
+    {"if": {"properties": {"type": {"const": "run.updated"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/run.updated"}}}},
+    {"if": {"properties": {"type": {"const": "interaction.created"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/interaction.created"}}}},
+    {"if": {"properties": {"type": {"const": "interaction.closed"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/interaction.closed"}}}},
+    {"if": {"properties": {"type": {"const": "model.confirmed"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/model.confirmed"}}}},
+    {"if": {"properties": {"type": {"const": "error"}}}, "then": {"properties": {"data": {"$ref": "#/definitions/error"}}}}
+  ],
+  "definitions": {
+    "message.delta": {
+      "type": "object", "required": ["id", "text"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9_.:-]+$"},
+        "text": {"type": "string"}, "temporary": {"type": "boolean"},
+        "abandoned": {"type": "boolean"}, "attemptId": {"type": "string"}, "revision": {"type": "integer", "minimum": 0}
+      }
+    },
+    "message.completed": {
+      "type": "object", "required": ["id", "text"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9_.:-]+$"},
+        "text": {"type": "string"}, "role": {"enum": ["user", "assistant", "reasoning"]},
+        "temporary": {"type": "boolean"}, "abandoned": {"type": "boolean"}, "attemptId": {"type": "string"}, "revision": {"type": "integer", "minimum": 0}
+      }
+    },
+    "tool.updated": {
+      "type": "object", "required": ["id"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9_.:-]+$"}, "status": {"type": "string"}}
+    },
+    "agent.updated": {
+      "type": "object", "required": ["id"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9_.:-]+$"}, "state": {"type": "string"}}
+    },
+    "run.updated": {
+      "type": "object", "required": ["state"],
+      "properties": {"state": {"enum": ["idle", "accepted", "running", "waiting_permission", "waiting_input", "cancel_requested", "completed", "failed", "cancelled", "uncertain"]}}
+    },
+    "interaction.created": {
+      "type": "object", "required": ["id", "sessionId", "kind", "epoch", "status", "nativeId", "nativeMethod", "choices", "questions"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9_.:-]+$"},
+        "sessionId": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9_.:-]+$"},
+        "kind": {"enum": ["permission", "question"]}, "epoch": {"type": "integer", "minimum": 0},
+        "status": {"enum": ["pending", "responding", "resolved", "stale"]},
+        "nativeId": {"anyOf": [{"type": "string"}, {"type": "number"}]}, "nativeMethod": {"type": "string"},
+        "choices": {"type": "array", "items": {"type": "object", "required": ["id", "label", "scope"], "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "scope": {"type": "string"}, "allows": {"type": "boolean"}}}},
+        "questions": {"type": "array", "items": {"type": "object", "required": ["id", "title", "options", "multiple", "freeText"], "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "options": {"type": "array", "items": {"type": "string"}}, "multiple": {"type": "boolean"}, "freeText": {"type": "boolean"}}}}
+      }
+    },
+    "interaction.closed": {
+      "type": "object", "required": ["id"],
+      "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[A-Za-z0-9_.:-]+$"}, "status": {"enum": ["resolved", "stale"]}}
+    },
+    "model.confirmed": {
+      "type": "object", "required": ["model"],
+      "properties": {"model": {"type": "object", "required": ["providerId", "modelId", "label"], "properties": {"providerId": {"type": "string", "minLength": 1}, "modelId": {"type": "string", "minLength": 1}, "label": {"type": "string"}}}}
+    },
+    "error": {"type": "object", "required": ["message"], "properties": {"message": {"type": "string"}}}
   }
 }

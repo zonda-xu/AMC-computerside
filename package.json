@@ -15,7 +15,9 @@
     "package:desktop": "node scripts/package-desktop.mjs",
     "test": "node --test tests/contracts/*.test.ts tests/gateway/*.test.ts tests/desktop/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "check:source": "node scripts/check-source.mjs"
+    "typecheck:desktop": "tsc --noEmit -p apps/desktop/tsconfig.json",
+    "check:source": "node scripts/check-source.mjs",
+    "check:offline": "node scripts/check-offline-readiness.mjs"
   },
   "dependencies": {
     "ajv": "8.17.1",
@@ -28,5 +30,5 @@
     "@types/ws": "8.18.1",
     "typescript": "5.9.3"
   },
-  "description": "Independent Windows, macOS and Linux host setup wizard for AI Maid Café"
+  "description": "AI Maid Cafe host gateway, native engine adapters and desktop connection assistant"
 }

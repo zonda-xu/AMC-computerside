@@ -1,0 +1,40 @@
+{
+  "fixtureVersion": 1,
+  "engine": "claude-code",
+  "version": "sdk-0.3.325-cli-2.1.325",
+  "provenance": "synthetic-plan-appendix-B-F",
+  "nativeVerified": false,
+  "sessionId": "00000000-0000-4000-8000-000000000010",
+  "runId": "00000000-0000-4000-8000-000000000011",
+  "create": {
+    "request": { "method": "query", "options": { "cwd": "/srv/work/offline", "pathToClaudeCodeExecutable": "/opt/claude/claude", "includePartialMessages": true, "permissionMode": "default", "settingSources": ["user", "project", "local"] } },
+    "response": { "type": "system", "subtype": "init", "session_id": "00000000-0000-4000-8000-000000000010", "cwd": "/srv/work/offline", "claude_code_version": "2.1.325" }
+  },
+  "submit": {
+    "request": { "type": "user", "message": { "role": "user", "content": "Run controlled tests." }, "parent_tool_use_id": null, "uuid": "00000000-0000-4000-8000-000000000011" },
+    "response": { "type": "stream_event", "event": { "type": "content_block_delta", "index": 0, "delta": { "type": "text_delta", "text": "Tests " } }, "parent_tool_use_id": null, "uuid": "00000000-0000-4000-8000-000000000012", "session_id": "00000000-0000-4000-8000-000000000010", "user_message_uuid": "00000000-0000-4000-8000-000000000011" }
+  },
+  "events": [
+    { "type": "assistant", "session_id": "00000000-0000-4000-8000-000000000010", "message": { "id": "msg_assistant_tool", "role": "assistant", "content": [{ "type": "tool_use", "id": "tool-1", "name": "Bash", "input": { "command": "node --test" } }] } },
+    { "type": "user", "session_id": "00000000-0000-4000-8000-000000000010", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "tool-1", "content": "1 test passed", "is_error": false }] } },
+    { "type": "assistant", "session_id": "00000000-0000-4000-8000-000000000010", "message": { "id": "msg_assistant_final", "role": "assistant", "content": [{ "type": "text", "text": "Tests passed." }] } },
+    { "type": "result", "subtype": "success", "is_error": false, "result": "Tests passed.", "stop_reason": "end_turn", "terminal_reason": "completed", "session_id": "00000000-0000-4000-8000-000000000010", "uuid": "00000000-0000-4000-8000-000000000013", "user_message_uuid": "00000000-0000-4000-8000-000000000011" }
+  ],
+  "approvals": [
+    { "request": { "method": "canUseTool", "toolName": "Bash", "input": { "command": "node --test" }, "options": { "requestId": "permission-1", "toolUseID": "tool-1" } }, "response": { "behavior": "allow", "updatedInput": { "command": "node --test" }, "toolUseID": "tool-1" } },
+    { "request": { "method": "canUseTool", "toolName": "Bash", "input": { "command": "rm protected.txt" }, "options": { "requestId": "permission-2", "toolUseID": "tool-2" } }, "response": { "behavior": "deny", "message": "User declined", "toolUseID": "tool-2" } }
+  ],
+  "question": {
+    "request": { "method": "canUseTool", "toolName": "AskUserQuestion", "input": { "questions": [{ "question": "Which tests?", "header": "Tests", "options": [{ "label": "All", "description": "All tests" }, { "label": "Unit", "description": "Unit tests" }], "multiSelect": false }] }, "options": { "requestId": "question-1", "toolUseID": "ask-1" } },
+    "response": { "behavior": "allow", "updatedInput": { "questions": [{ "question": "Which tests?", "header": "Tests", "options": [{ "label": "All", "description": "All tests" }, { "label": "Unit", "description": "Unit tests" }], "multiSelect": false }], "answers": { "Which tests?": "All" } }, "toolUseID": "ask-1" }
+  },
+  "cancelRace": {
+    "request": { "method": "Query.interrupt", "queryHandle": "query-offline-1" },
+    "terminalBeforeResponse": { "type": "result", "subtype": "success", "is_error": false, "terminal_reason": "completed", "stop_reason": "end_turn", "result": "Tests passed.", "session_id": "00000000-0000-4000-8000-000000000010", "uuid": "00000000-0000-4000-8000-000000000013", "user_message_uuid": "00000000-0000-4000-8000-000000000011" },
+    "response": { "still_queued": [], "cancelled": [] }
+  },
+  "continuation": {
+    "sameQuery": { "queryHandle": "query-offline-1", "input": { "type": "user", "message": { "role": "user", "content": "Explain the previous result." }, "parent_tool_use_id": null, "uuid": "00000000-0000-4000-8000-000000000014" } },
+    "afterQueryEnds": { "method": "query", "options": { "resume": "00000000-0000-4000-8000-000000000010", "pathToClaudeCodeExecutable": "/opt/claude/claude", "permissionMode": "default" } }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "fixtureVersion": 1,
+  "provenance": "synthetic-plan-appendix-F",
+  "nativeVerified": false,
+  "binding": { "hostId": "host-linux", "workspaceId": "ws-offline", "runtimeInstanceId": "runtime-offline", "sessionId": "session-offline", "generation": 3 },
+  "scenarios": [
+    {
+      "id": "01-success",
+      "steps": [
+        { "op": "submit", "deviceId": "device-A", "clientRequestId": "submit-1", "body": "Run tests", "runId": "run-1" },
+        { "op": "submit", "deviceId": "device-A", "clientRequestId": "submit-1", "body": "Run tests", "runId": "run-1" },
+        { "op": "submit", "deviceId": "device-A", "clientRequestId": "submit-1", "body": "Different body", "runId": "run-1" },
+        { "op": "accepted" }, { "op": "started" },
+        { "op": "delta", "messageId": "assistant-1", "text": "Tests " },
+        { "op": "toolStart", "toolId": "tool-1" },
+        { "op": "toolResult", "toolId": "tool-1", "text": "1 test passed" },
+        { "op": "final", "messageId": "assistant-1", "text": "Tests passed." },
+        { "op": "terminal", "state": "completed", "reason": "native_completed" }
+      ],
+      "expected": { "state": "completed", "nativeSubmits": 1, "conflicts": 1, "finalText": "Tests passed.", "notifications": 1 }
+    },
+    {
+      "id": "02-stop-race",
+      "steps": [
+        { "op": "started" }, { "op": "cancelIntent" },
+        { "op": "terminal", "state": "completed", "reason": "native_completed" },
+        { "op": "submit", "deviceId": "device-A", "clientRequestId": "submit-2", "body": "Continue", "runId": "run-2" },
+        { "op": "cancelAck" }, { "op": "started" }
+      ],
+      "expected": { "state": "completed", "nativeSubmits": 0, "blockedSubmits": 1, "notifications": 1 }
+    },
+    {
+      "id": "03-approval-once",
+      "steps": [
+        { "op": "approval", "interactionId": "interaction-1", "generation": 3 },
+        { "op": "phoneDisconnect" },
+        { "op": "decision", "interactionId": "interaction-1", "generation": 3, "deviceId": "device-A", "answer": "allow" },
+        { "op": "decision", "interactionId": "interaction-1", "generation": 3, "deviceId": "device-B", "answer": "deny" }
+      ],
+      "expected": { "state": "running", "nativeSubmits": 0, "settlements": 1, "nativeResponses": 1, "rejectedDecisions": 1, "pending": 0, "notifications": 0 }
+    },
+    {
+      "id": "04-restart-after-write",
+      "steps": [
+        { "op": "submit", "deviceId": "device-A", "clientRequestId": "submit-1", "body": "Run tests", "runId": "run-1" },
+        { "op": "nativeAcceptedAckLost" }, { "op": "gatewayRestart" },
+        { "op": "recover", "state": "running" },
+        { "op": "submit", "deviceId": "device-A", "clientRequestId": "submit-1", "body": "Run tests", "runId": "run-1" }
+      ],
+      "expected": { "state": "running", "nativeSubmits": 1, "notifications": 0 }
+    },
+    {
+      "id": "05-native-stream-gap",
+      "steps": [
+        { "op": "started" }, { "op": "delta", "messageId": "assistant-1", "text": "Tests " },
+        { "op": "streamLost" }, { "op": "phoneDisconnect" },
+        { "op": "recover", "state": "completed", "messageId": "assistant-1", "text": "Tests passed.", "nativeReplay": false },
+        { "op": "recover", "state": "completed", "messageId": "assistant-1", "text": "Tests passed.", "nativeReplay": false }
+      ],
+      "expected": { "state": "completed", "nativeSubmits": 0, "finalText": "Tests passed.", "notifications": 1 }
+    },
+    {
+      "id": "06-generation-change",
+      "steps": [
+        { "op": "approval", "interactionId": "interaction-1", "generation": 3 },
+        { "op": "bridgeReconnect" },
+        { "op": "replaceRuntime", "generation": 4 },
+        { "op": "decision", "interactionId": "interaction-1", "generation": 3, "deviceId": "device-A", "answer": "allow" }
+      ],
+      "expected": { "state": "uncertain", "generation": 4, "nativeSubmits": 0, "settlements": 0, "nativeResponses": 0, "rejectedDecisions": 1, "pending": 0, "notifications": 0 }
+    },
+    {
+      "id": "07-limits-and-errors",
+      "steps": [
+        { "op": "started" }, { "op": "final", "messageId": "assistant-1", "text": "Partial output retained." },
+        { "op": "terminal", "state": "failed", "reason": "output_limit" },
+        { "op": "started" }
+      ],
+      "expected": { "state": "failed", "nativeSubmits": 0, "finalText": "Partial output retained.", "notifications": 0 }
+    }
+  ],
+  "errors": [
+    { "engine": "codex", "native": { "method": "turn/completed", "params": { "threadId": "thread-offline-1", "turn": { "id": "turn-offline-1", "status": "failed", "error": { "message": "Execution failed" } } } }, "expectedState": "failed" },
+    { "engine": "claude-code", "native": { "type": "result", "subtype": "success", "is_error": true, "terminal_reason": "api_error", "stop_reason": null, "result": "API unavailable", "session_id": "00000000-0000-4000-8000-000000000010", "uuid": "00000000-0000-4000-8000-000000000015" }, "expectedState": "failed" },
+    { "engine": "opencode", "native": { "id": "evt-failure", "created": 1794787200006, "type": "session.execution.failed", "data": { "sessionID": "ses_offline1", "error": { "message": "Execution failed" } } }, "expectedState": "failed" },
+    { "engine": "deepseek-harness", "native": { "type": "event", "event": { "type": "turn/end", "seq": 6, "time": 1794787200007, "data": { "turn": 1, "reason": { "kind": "max-tokens" } } } }, "expectedState": "failed" }
+  ]
+}

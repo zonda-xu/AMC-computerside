@@ -42,7 +42,7 @@ test('DSH configured CLI/revision cannot impersonate loaded API evidence and mut
   const f = await fixture();
   try {
     const adapter = new DshAdapter('deepseek-harness', { command: 'fixture-only', expectedVersion: '0.2.1-rc.5' }, f.adapter.context);
-    for (const method of ['create', 'state', 'prompt', 'cancel', 'selectModel', 'respond', 'constructor', 'toString']) await assert.rejects(() => adapter.call(method), /read-only/);
+    for (const method of ['create', 'snapshot', 'prompt', 'cancel', 'decide']) await assert.rejects(() => adapter.call(method), /not connected/);
     for (const response of [
       { version: '0.2.1-rc.5', externalProtocol: 1, sourceRevision: 'fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159', instanceId: 'fixture' },
       { version: '0.2.1-rc.5', externalProtocol: 2, apiProfile: 'dsh-controller-0.2.1-rc.5-page-v2', controllerDigest: 'modified', control: false, instanceId: 'fixture' }
@@ -72,13 +72,14 @@ test('DSH read-only bridge ignores legacy managed events that could release an u
   try {
     await once(server, 'listening'); const address = server.address(); assert.ok(address && typeof address !== 'string');
     const connected = once(server, 'connection'); const socket = new WebSocket(`ws://127.0.0.1:${address.port}`); const [bridge] = await connected;
-    await once(socket, 'open'); adapter.attach(socket); adapter.byNative.set(f.s.ref.nativeSessionId, f.s.id);
-    f.adapter.context.emit(f.s.id, 'run.updated', { state: 'uncertain' });
-    bridge.once('message', (raw: Buffer) => {
+    await once(socket, 'open');
+    bridge.on('message', (raw: Buffer) => {
       const message = JSON.parse(raw.toString());
       bridge.send(JSON.stringify({ method: 'event', params: { sessionId: f.s.ref.nativeSessionId, type: 'run.updated', data: { state: 'completed' } } }));
       bridge.send(JSON.stringify({ id: message.id, result: { version: '0.2.1-rc.5', externalProtocol: 1 } }));
     });
+    adapter.attach(socket); adapter.byNative.set(f.s.ref.nativeSessionId, f.s.id);
+    f.adapter.context.emit(f.s.id, 'run.updated', { state: 'uncertain' });
     await adapter.call('probe', {}, 5000);
     assert.equal(f.core.session(f.s.id).state, 'uncertain');
   } finally {

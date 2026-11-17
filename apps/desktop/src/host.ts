@@ -2,14 +2,16 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { access, chmod, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { hostname, networkInterfaces, platform } from 'node:os';
 import { isIP } from 'node:net';
 import { nativeCommand } from '../../../packages/adapters/common/command.ts';
 import { nativeEnvironment } from '../../../packages/adapters/common/rpc.ts';
-import type { RuntimeConfig } from '../../../packages/adapters/common/base.ts';
 import type { EngineId } from '../../../packages/protocol/src/types.ts';
 import { automationSettings, type AutomationConfig } from '../../gateway/src/automation.ts';
+import { codexEndpoint, type ManagedRuntimeConfig } from './runtime.ts';
+import type { HuaweiPushConfig } from '../../gateway/src/huawei-push.ts';
+import type { RuntimeUpdateConfig } from '../../gateway/src/runtime-updates.ts';
 
 export const engines: EngineId[] = ['codex', 'claude-code', 'opencode', 'deepseek-harness'];
 export const commands = { codex: 'codex', 'claude-code': 'claude', opencode: 'opencode', 'deepseek-harness': 'dsh' };
@@ -22,8 +24,10 @@ export const system = systems[platform() as keyof typeof systems] || systems.lin
 export interface HostConfig {
   hostId: string; name: string; os: string; listen: string; port: number; publicEndpoint: string;
   dataDir: string; caFile: string; certFile: string; keyFile: string;
-  allowedWorkspaceRoots: string[]; runtimes: Record<EngineId, RuntimeConfig>;
+  allowedWorkspaceRoots: string[]; runtimes: Record<EngineId, ManagedRuntimeConfig>;
   automation?: AutomationConfig;
+  push?: HuaweiPushConfig;
+  runtimeUpdates?: RuntimeUpdateConfig;
 }
 export interface SetupInput {
   name: string; mode: 'lan' | 'relay'; address: string; publicHost?: string;
@@ -57,17 +61,28 @@ export async function opensslCommand() {
 export async function probeRuntime(engine: EngineId, command: string) {
   if (!engines.includes(engine) || typeof command !== 'string' || !command.trim() || command.length > 4096 || /[\r\n\0]/.test(command)) throw new Error('请选择有效的 AI 程序路径。');
   try {
-    const native = nativeCommand(command.trim());
+    let native = nativeCommand(command.trim());
+    const environment = nativeEnvironment(engine);
+    // The official Windows desktop bundle exposes its CLI through Electron's
+    // Node mode; launching the GUI with --version does not probe that runtime.
+    if (engine === 'deepseek-harness' && platform() === 'win32' && basename(command.trim()).toLowerCase() === 'deepseek harness.exe') {
+      const resources = join(dirname(command.trim()), 'resources');
+      await access(join(resources, 'app.asar'));
+      await access(join(resources, 'runtime', 'cli', 'bin', 'dsh.cmd'));
+      native = { command: command.trim(), args: ['--expose-internals', join(resources, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js')] };
+      environment.ELECTRON_RUN_AS_NODE = '1';
+    }
     const { stdout } = await run(native.command, [...native.args, '--version'], {
-      env: nativeEnvironment(engine), timeout: 10000, windowsHide: true, maxBuffer: 65536
+      env: environment, timeout: 10000, windowsHide: true, maxBuffer: 65536
     });
     const version = stdout.trim();
     if (!version) throw new Error('empty version');
     let detail = '已读取版本；请先在电脑完成官方登录，手机首次任务仍需验证。';
-    if (engine === 'codex') detail = ['codex-cli 0.167.0-alpha.4.1', 'codex-cli 0.167.1'].includes(version)
-      ? '版本有精确外部历史协议依据；网关固定完整版本后可只读发现/导入/手动刷新，不代表原终端控制或实机验收。'
-      : '已安装，但此版本没有核验的外部历史 profile；不会按相近版本开放接入。';
-    if (engine === 'deepseek-harness') detail = 'CLI 已安装不等于宿主 API 已验证。需要同宿主 bridge v2 对官方 rc.5 controller 文件摘要和加载实例握手；当前只读历史，受管创建/发送/审批禁用。';
+    if (engine === 'codex') detail = version === 'codex-cli 0.169.0'
+      ? '目标版本匹配；共享 app-server 需显式启动/登记，版本输出不代表已接管原生会话。'
+      : '目标为 codex-cli 0.169.0；当前版本不匹配，不能启动共享控制运行时。';
+    if (engine === 'opencode') detail = '目标为 client/CLI 2.3.0；普通探测只做 discover，不会 ensure 或替换现有服务。';
+    if (engine === 'deepseek-harness') detail = 'CLI 版本不代表控制能力；以同宿主 bridge/controller 握手及实际能力为准。';
     return { engine, command: command.trim(), installed: true, version, detail };
   } catch {
     return { engine, command: command.trim(), installed: false, version: '', detail: '无法运行此程序的 --version。请检查安装、路径或执行权限，再重新检测。' };
@@ -116,12 +131,12 @@ export async function saveHost(root: string, input: SetupInput) {
   try { await access(bridgeTokenFile); } catch { await writeFile(bridgeTokenFile, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' }); }
   const runtimes = Object.fromEntries(engines.map(id => {
     const result = enabled.find(r => r.engine === id);
-    return [id, { command: result?.command || commands[id], expectedVersion: result?.version || 'DISABLED', enabled: !!result,
-      models: previous?.runtimes[id]?.models || [], ...(id === 'deepseek-harness' ? { bridgeTokenFile } : {}) }];
-  })) as Record<EngineId, RuntimeConfig>;
+    return [id, { ...previous?.runtimes[id], command: result?.command || previous?.runtimes[id]?.command || commands[id], expectedVersion: result?.version || previous?.runtimes[id]?.expectedVersion || 'DISABLED', enabled: !!result,
+      models: previous?.runtimes[id]?.models || [], ...(id === 'codex' ? { endpoint: codexEndpoint } : {}), ...(id === 'deepseek-harness' ? { bridgeTokenFile } : {}) }];
+  })) as Record<EngineId, ManagedRuntimeConfig>;
   const config: HostConfig = { ...previous, hostId, name: input.name.trim(), os: platform(), listen: input.address, port: 8899,
-    publicEndpoint: `https://${target}:${input.mode === 'relay' ? system.publicPort : 8899}`, dataDir: root,
-    caFile, certFile, keyFile, allowedWorkspaceRoots: [workspace], runtimes, automation: automationSettings(input.automation ?? previous?.automation) };
+    publicEndpoint: `https://${target}:${input.mode === 'relay' ? system.publicPort : 8899}`, dataDir: previous?.dataDir ?? root,
+    caFile, certFile, keyFile, allowedWorkspaceRoots: [workspace], runtimes, automation: automationSettings(input.automation ?? previous?.automation),runtimeUpdates:previous?.runtimeUpdates??{enabled:true} };
   const temporary = join(root, `config-${randomUUID()}.tmp`);
   await writeFile(temporary, JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   await rename(temporary, join(root, 'host.config.json'));

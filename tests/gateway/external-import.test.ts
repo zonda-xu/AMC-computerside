@@ -28,19 +28,19 @@ test('unknown tools fail closed and report all four independent profiles', async
     await assert.rejects(() => f.core.external.discover(f.w.id, 'claude-code'), /verified/);
   } finally { await f.close(); }
 });
-test('DSH external fixture requires a nonempty pinned version and never probes a disabled runtime', async () => {
+test('DSH external fixture permits capability probing without a version and never probes a disabled runtime', async () => {
   const f = await fixture();
   try {
     const adapter = new DshAdapter('deepseek-harness', { command: 'fixture-only', expectedVersion: '' }, f.core.context('deepseek-harness'));
     let calls = 0; let version = '';
     adapter.call = async () => { calls++; return { version, externalProtocol: 2, apiProfile: 'dsh-controller-0.2.1-rc.5-page-v2', controllerDigest: 'a9801acb577b03053c5d5a3191ff555c5f1d791d0acddec113bea4511e33b386', control: false, instanceId: 'fixture-instance' }; };
     const provider = new DshExternalProvider(adapter);
-    assert.equal((await provider.profile()).discover.state, 'unverified'); assert.equal(calls, 0);
+    assert.equal((await provider.profile()).discover.state, 'unverified'); assert.equal(calls, 1);
     adapter.config.expectedVersion = '0.2.1-rc.5';
     assert.equal((await provider.profile()).discover.state, 'unverified');
     version = '0.2.1-rc.5';
     const supported = await provider.profile(); assert.equal(supported.discover.state, 'supported'); assert.equal(supported.submit.state, 'unverified');
-    adapter.config.expectedVersion = 'different-version';
+    adapter.config.compatibilityMode = 'pinned'; adapter.config.expectedVersion = 'different-version';
     assert.match((await provider.profile()).discover.reason, /does not match expectedVersion/);
     adapter.config.expectedVersion = version;
     adapter.config.enabled = false; const before = calls;
@@ -59,7 +59,7 @@ test('external source import is idempotent, message sync deduplicates persistent
     f.adapter.context.emit(f.s.id, 'run.updated', { state: 'uncertain' });
     await f.core.external.sync(s.id); await f.core.external.sync(s.id);
     assert.equal(f.core.session(s.id).watermark, 2); assert.equal(f.core.session(s.id).messages.length, 2);
-    assert.equal(f.core.session(s.id).state, 'idle'); assert.equal(f.core.session(f.s.id).state, 'uncertain');
+    assert.equal(f.core.session(s.id).state, 'uncertain'); assert.equal(f.core.session(s.id).binding?.state,'unbound'); assert.equal(f.core.session(f.s.id).state, 'uncertain');
     assert.equal(f.core.session(s.id).interactions.length, 0);
     const restart = new Core(f.store, f.core.hostId, [f.root]); restart.external.providers.set('codex', p);
     await restart.external.sync(s.id); assert.equal(restart.session(s.id).watermark, 2);
@@ -68,14 +68,14 @@ test('external source import is idempotent, message sync deduplicates persistent
     assert.equal(restart.session(s.id).watermark, 3);
   } finally { await f.close(); }
 });
-test('external projections cannot bypass read-only mutation guards through old commands or direct dispatch', async () => {
+test('unbound external projections cannot bypass binding guards through v2 commands or direct dispatch', async () => {
   const f = await fixture();
   try {
     const p = new FixtureProvider(f.w.path); f.core.external.providers.set('codex', p);
     const c = (await f.core.external.discover(f.w.id, 'codex')).items[0]; const s = await f.core.external.import('device', 'read-only', c.candidateId);
     for (const action of ['submit', 'cancel', 'configure', 'decide']) {
-      assert.throws(() => f.core.accept('device', command(s, action)), /read-only/);
-      await assert.rejects(() => f.core.execute('device', command(s, action)), /mutations/);
+      const request=command(s,action,{runId:'unknown-run',interactionId:'unknown-interaction',text:'denied'});f.core.accept('device',request);await f.core.drain();assert.equal(f.store.getReceipt('device',request.clientRequestId)?.status,'rejected');
+      await assert.rejects(() => f.core.execute('device', request), /Historical messages/);
     }
     assert.equal(f.adapter.submitted, 0); assert.equal(f.adapter.decisions, 0);
   } finally { await f.close(); }
@@ -137,6 +137,6 @@ test('external message validation rejects oversized and malformed history before
     const c = (await f.core.external.discover(f.w.id, 'codex')).items[0]; const s = await f.core.external.import('device', 'budget', c.candidateId);
     p.page = { items: [{ nativeEventId: 'too-large', role: 'assistant', text: 'x'.repeat(100001) }] };
     await assert.rejects(() => f.core.external.sync(s.id), /Malformed/); assert.equal(f.core.session(s.id).watermark, 0);
-    const before: Session = f.core.session(s.id); assert.equal(before.state, 'idle');
+    const before: Session = f.core.session(s.id); assert.equal(before.state, 'uncertain');
   } finally { await f.close(); }
 });

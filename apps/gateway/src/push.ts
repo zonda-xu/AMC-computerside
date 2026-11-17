@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Store, digest } from './store.ts';
 import type { ConsoleEvent, Session } from '../../../packages/protocol/src/types.ts';
+import { TERMINAL } from '../../../packages/protocol/src/types.ts';
 import { requireValue, stable } from '../../../packages/protocol/src/validation.ts';
 
 export type PushResult = 'accepted' | 'retry' | 'invalid_token' | 'permission' | 'authentication' | 'permanent';
-export interface PushNotice { hostId: string; sessionId: string; eventId: string; notificationId: string; title: string; body: string; ttlSeconds: number }
-export interface PushTransport { send(token: string, notice: PushNotice, signal: AbortSignal): Promise<PushResult> }
+export interface PushNotice { hostId: string; sessionId: string; eventId: string; interactionId?: string; notificationId: string; title: string; body: string; ttlSeconds: number }
+export interface PushTransport { lastResult?: { code: string; requestId?: string }; send(token: string, notice: PushNotice, signal: AbortSignal): Promise<PushResult> }
 export interface PushOptions { transport?: PushTransport; now?: () => number; random?: () => number; authorize?: (session: Session, signal: AbortSignal) => Promise<boolean> }
 export class PushCoordinator {
   private store: Store;
@@ -26,7 +27,7 @@ export class PushCoordinator {
   }
   status() {
     return { state: !this.transport ? 'unconfigured' : this.blocked ?? (this.stopped ? 'stopped' : 'ready'),
-      reason: !this.transport ? 'Official Harmony Push endpoint and JWT audience are not verified; sending disabled' : undefined };
+      reason: !this.transport ? 'Harmony Push service account and notification category are not configured' : undefined };
   }
   private device(device: string) {
     requireValue(this.store.db.prepare('SELECT id FROM devices WHERE id=? AND revoked=0').get(device), 'unauthorized', 'Device authorization required', 401);
@@ -58,8 +59,12 @@ export class PushCoordinator {
     return this.binding(device);
   }
   private source(session: Session) {
-    requireValue(session.ref.hostId === this.hostId && session.externalSource?.readOnly, 'push_source_invalid', 'Push requires a local external read-only projection', 409);
-    return digest(stable([session.ref, session.externalSource]));
+    requireValue(session.ref.hostId === this.hostId, 'push_source_invalid', 'Push requires a local authorized session', 409);
+    return digest(stable([session.ref, session.externalSource, session.binding?.generation]));
+  }
+  private actionable(session: Session, event: ConsoleEvent): boolean {
+    if (TERMINAL.includes(session.state) || session.binding?.state !== 'attached' || event.generation !== session.binding.generation || event.runId !== session.runId) return false;
+    return session.interactions.some(item => item.id === event.data.id && item.status === 'pending' && (item.generation ?? item.epoch) === event.generation && (!item.runId || item.runId === session.runId));
   }
   completeBaseline(sessionId: string, complete: boolean): boolean {
     requireValue(this.store.db.isTransaction, 'push_transaction_required', 'Baseline must share the sync transaction', 409);
@@ -78,22 +83,26 @@ export class PushCoordinator {
     const session = this.store.get<Session>('session', sessionId);
     requireValue(session, 'session_missing', 'Session not registered', 404);
     const source = this.source(session);
-    const baseline = this.store.db.prepare('SELECT source,watermark FROM push_baselines WHERE session=?').get(sessionId);
-    if (!baseline || baseline.source !== source || seq <= Number(baseline.watermark)) return 0;
     const row = this.store.db.prepare('SELECT json FROM events WHERE session=? AND seq=?').get(sessionId, seq);
     requireValue(row, 'push_event_missing', 'Committed projection event required', 409);
     const event = JSON.parse(row.json as string) as ConsoleEvent;
-    if (event.type !== 'message.completed' || event.data.role !== 'assistant' || typeof event.data.text !== 'string' || !event.data.text.trim()) return 0;
-    const version = digest(stable([source, event.data.id, event.data.text]));
+    if (event.data.ignored || event.data.silentBaseline || event.data.historical) return 0;
+    const terminal = event.type === 'run.updated' && ['completed', 'failed', 'cancelled'].includes(String(event.data.state));
+    const interaction = event.type === 'interaction.created';
+    if (!terminal && !interaction) return 0;
+    if (session.externalSource?.readOnly && session.binding?.state !== 'attached') return 0;
+    if (interaction && !this.actionable(session,event)) return 0;
+    const identity = interaction ? event.data.id : event.data.runId ?? session.runId;
+    if (typeof identity !== 'string' || !identity) return 0;
+    const version = digest(stable([source, terminal ? 'terminal' : 'interaction', identity]));
     const now = this.now(); let queued = 0;
     for (const b of this.store.db.prepare('SELECT b.device,b.revision FROM push_bindings b JOIN devices d ON d.id=b.device WHERE d.revoked=0').all()) {
       const key = digest(stable([b.device, sessionId, version]));
       if (this.store.db.prepare('SELECT id FROM push_intents WHERE id=?').get(key)) continue;
-      const group = this.store.db.prepare("SELECT id FROM push_jobs WHERE device=? AND revision=? AND session=? AND status='pending' AND attempts=0 AND created>? AND expires>? ORDER BY created LIMIT 1").get(b.device, b.revision, sessionId, now - 10_000, now);
-      const job = group?.id as string ?? randomUUID();
-      const eventId = digest(stable([sessionId, seq]));
-      if (!group) this.store.db.prepare("INSERT INTO push_jobs(id,device,revision,session,event,status,created,due,expires) VALUES(?,?,?,?,?,'pending',?,?,?)").run(job, b.device, b.revision, sessionId, eventId, now, now + 10_000, now + 3_600_000);
-      else this.store.db.prepare('UPDATE push_jobs SET event=? WHERE id=?').run(eventId, job);
+      const job = randomUUID();
+      const eventId = String(seq);
+      this.store.db.prepare("INSERT INTO push_jobs(id,device,revision,session,event,status,created,due,expires) VALUES(?,?,?,?,?,'pending',?,?,?)").run(job, b.device, b.revision, sessionId, eventId, now, now, now + 3_600_000);
+      this.store.put('push-source', job, { source });
       this.store.db.prepare('INSERT INTO push_intents VALUES(?,?)').run(key, job); queued++;
     }
     return queued;
@@ -119,9 +128,9 @@ export class PushCoordinator {
         const job = this.store.db.prepare("SELECT j.*,b.token FROM push_jobs j JOIN push_bindings b ON b.device=j.device AND b.revision=j.revision JOIN devices d ON d.id=b.device WHERE j.status='pending' AND j.due<=? AND j.expires>? AND d.revoked=0 ORDER BY j.due LIMIT 1").get(time, time);
         if (!job) return;
         const session = this.store.get<Session>('session', job.session as string);
-        const baseline = this.store.db.prepare('SELECT source FROM push_baselines WHERE session=?').get(job.session);
-        if (!session?.externalSource?.readOnly || session.ref.hostId !== this.hostId || baseline?.source !== this.source(session)) {
-          this.store.db.prepare("UPDATE push_jobs SET status='cancelled',lease=NULL WHERE session=? AND status IN ('pending','sending')").run(job.session);
+        const savedSource = this.store.get<{ source: string }>('push-source', String(job.id));
+        if (!session || session.ref.hostId !== this.hostId || (session.externalSource?.readOnly && session.binding?.state !== 'attached') || savedSource?.source !== this.source(session)) {
+          this.store.db.prepare("UPDATE push_jobs SET status='cancelled',lease=NULL WHERE id=? AND status IN ('pending','sending')").run(job.id);
           return { skipped: true as const };
         }
         const lease = randomUUID();
@@ -140,7 +149,15 @@ export class PushCoordinator {
             const allowed = await this.authorize(session, controller.signal).catch(() => false);
             controller.signal.throwIfAborted();
             if (!allowed || !this.store.db.prepare("SELECT j.id FROM push_jobs j JOIN push_bindings b ON b.device=j.device AND b.revision=j.revision JOIN devices d ON d.id=b.device WHERE j.id=? AND j.lease=? AND j.status='sending' AND d.revoked=0").get(job.id, lease)) return 'source_unavailable';
-            return this.transport!.send(job.token as string, { hostId: this.hostId, sessionId: job.session as string, eventId: job.event as string, notificationId: job.id as string, title: 'AI 会话有更新', body: '打开应用查看最新内容', ttlSeconds: Math.max(1, Math.floor((Number(job.expires) - this.now()) / 1000)) }, controller.signal);
+             const row = this.store.db.prepare('SELECT json FROM events WHERE session=? AND seq=?').get(job.session, Number(job.event));
+             if (!row || typeof row.json !== 'string') return 'source_unavailable';
+             const event: ConsoleEvent = JSON.parse(row.json);
+             const interactionId = event.type === 'interaction.created' && typeof event.data.id === 'string' ? event.data.id : undefined;
+             const latest = this.store.get<Session>('session', session.id);
+             if (!latest || this.source(latest) !== this.source(session)) return 'source_unavailable';
+              if (interactionId && !this.actionable(latest,event)) return 'source_unavailable';
+             const title = interactionId ? '任务需要您的处理' : event.data.state === 'cancelled' ? '当前轮已停止' : event.data.state === 'failed' ? '任务执行失败' : '任务已完成';
+             return this.transport!.send(job.token as string, { hostId: this.hostId, sessionId: job.session as string, eventId: job.event as string, interactionId, notificationId: job.id as string, title, body: '打开应用查看当前状态', ttlSeconds: Math.max(1, Math.floor((Number(job.expires) - this.now()) / 1000)) }, controller.signal);
           })(),
           new Promise<PushResult>(resolve => { timer = setTimeout(() => { controller.abort(); resolve('retry'); }, 10_000); })
         ]);
@@ -149,6 +166,7 @@ export class PushCoordinator {
       this.store.transaction(() => {
         const current = this.store.db.prepare("SELECT id FROM push_jobs WHERE id=? AND lease=? AND status='sending'").get(job.id, lease);
         if (!current) return;
+        if (this.transport?.lastResult) this.store.put('push-provider-result', String(job.id), { ...this.transport.lastResult, result, time: this.now() });
         if (result === 'invalid_token') {
           this.store.db.prepare('DELETE FROM push_bindings WHERE device=? AND revision=?').run(job.device, job.revision);
           this.store.db.prepare("UPDATE push_jobs SET status='cancelled',lease=NULL WHERE device=? AND revision=? AND status IN ('pending','sending')").run(job.device, job.revision);

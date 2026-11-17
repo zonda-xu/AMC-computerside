@@ -13,7 +13,8 @@ for(const f of files){
   if(f.endsWith('.ets')){
     const s=await readFile(f,'utf8');if(/(?:\bas\s+|:\s*)(any|unknown)\b/.test(s))throw new Error('Dynamic type in ArkTS '+f);
     for(const m of s.matchAll(/from ['"]([^'"]+)['"]/g)){if(m[1].startsWith('.'))await access(resolve(dirname(f),m[1]+'.ets'));}
-    for(const m of s.matchAll(/\$rawfile\(['"]([^'"]+)['"]\)/g))await access(join('apps/harmony/entry/src/main/resources/rawfile',m[1]));
+    const moduleMain = f.replaceAll('\\','/').split('/ets/')[0];
+    for(const m of s.matchAll(/\$rawfile\(['"]([^'"]+)['"]\)/g))await access(join(moduleMain,'resources/rawfile',m[1]));
     count++;
   }
 }

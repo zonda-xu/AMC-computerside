@@ -1,49 +1,63 @@
-# AMC 电脑连接助手
+# AMC 电脑连接助手与主机网关
 
-Windows、macOS 和 Linux 的独立电脑端工具，让 HarmonyOS 上的 AI Maid Café 通过受信任的加密连接管理本机 AI 编程终端。
+AI Maid Café 的主机端源码，支持 Windows、macOS 和 Linux。手机端及独立特效 Demo 位于 [AI-Maid-Caf-](https://github.com/zonda-xu/AI-Maid-Caf-)。
 
-## 下载与使用
+本仓库包含电脑连接向导、HTTPS/WSS 网关、SQLite 持久化、四引擎适配器和 DeepSeek Harness 宿主桥接插件，不包含手机工程、人物素材、个人主机配置或密钥。
 
-从 [Releases](https://github.com/zonda-xu/AMC-computerside/releases) 下载对应系统的 ZIP，完整解压后打开 `START-HERE.html`。
+## 从源码运行
 
-| 系统 | 启动入口 |
-|---|---|
-| Windows | `Start-Windows.cmd` |
-| macOS | `Start-macOS.command` |
-| Linux | `Start-Linux.sh` |
-
-需要 Node.js 24.13+（24.x）和 OpenSSL；AI 程序需自行安装并完成官方登录。包内已包含 JavaScript 运行依赖，无需 npm install。包体不包含 HarmonyOS 项目、手机素材或任何个人凭据。
-
-## 五步连接
-
-1. 检测运行环境与网卡。
-2. 选择同一 Wi-Fi 或 EasyTier 远程中转。
-3. 选择项目目录和 AI 程序，检测并固定完整版本。
-4. 启动网关，让手机扫码；也可导出二维码 PNG 或配对 JSON。
-5. 检查已配对设备，按指引发起首次真实任务。
-
-支持 Codex app-server、Claude Code stream-json、OpenCode ACP 和 DeepSeek Harness 本机桥接。此工具通过原生协议管理会话，不接管任意现有终端窗口。程序版本检测和配对成功均不代替真实 AI 任务验收。
-
-## 本地开发
+需要 Node.js 24.13+（24.x）、OpenSSL，以及自行安装并登录的 AI 平台。SDK 和原生工具依赖应按 [运行时交接](apps/desktop/RUNTIME_HANDOFF.md) 配置；根 npm 依赖不会替代官方原生程序。
 
 ```sh
 npm ci --ignore-scripts
 npm start
+```
+
+浏览器打开仅绑定 `127.0.0.1` 的电脑向导：选择网络、授权工作区及 AI 平台，启动网关，再用手机扫码配对。连接信息、证书和 SQLite 保存在当前用户目录的 `.ai-maid-cafe/desktop`，再次启动继续使用原身份。
+
+已有主机配置可直接运行：
+
+```sh
+npm run gateway -- /absolute/private/host.config.json
+npm run pair -- --config /absolute/private/host.config.json --out pairing-device.png
+```
+
+首次命令行初始化步骤见 [HOST_SETUP](docs/HOST_SETUP.md)。升级时保留现有配置、数据库、CA、配对记录及桥接密钥。
+
+## 原生接入
+
+| 平台 | 接入方式 |
+| --- | --- |
+| Codex | 官方 app-server WebSocket、模型目录、会话及运行控制；支持原生线程模型设置和确认 |
+| Claude Code | 官方 Agent SDK 持久 Query、模型目录、任务事件与交互 |
+| OpenCode | v2 HTTP/SSE、模型目录和原生会话控制 |
+| DeepSeek Harness | 在同一宿主加载 Cordis 插件，通过 sessionController 管理原生会话 |
+
+DSH 默认根据实际能力协商接入，保留显式固定版本模式。模型、附件、审批、问答、slash/steer 等能力以宿主实际支持为准。详情见 [DSH 接入说明](docs/DSH_INTEGRATION_2026-11-17.md)。
+
+网关和手机共同使用协议 v2。会话身份、运行代次、幂等命令、水位恢复、工作区授权及 SQLite 持久化继续有效；切换手机页面或平台不会自动取消其他任务。EasyTier 仅提供网络互通，配对与访问仍使用受信任的 TLS。
+
+## 检查与打包
+
+```sh
 npm test
 npm run typecheck
+npm run typecheck:desktop
 npm run check:source
 npm run package:desktop
 ```
 
-产物在 `dist/desktop/<时间戳>/`，包含三个 ZIP 和 SHA-256 清单。GitHub Actions 在三个系统运行测试；通过后为 main 上的新版本创建 Release，已有同名版本不会被覆盖。修改版本号后推送可发布新版本。
+`package:desktop` 在 `dist/desktop/` 生成三系统 ZIP 和 SHA-256 清单。基础包包含 JavaScript 管理依赖，不捆绑 Node.js、OpenSSL 或已登录的原生 AI 程序。`npm run check:offline` 可检查另行准备的离线依赖是否完整；缺少原生依赖时失败是预期行为。
 
-## 说明
+源码上传不改变已发布安装包。历史下载位于 [Releases](https://github.com/zonda-xu/AMC-computerside/releases)，使用前核对对应版本说明。
 
-- [使用与排查](docs/DESKTOP_GUIDE.md)
-- [验证记录与限制](docs/DESKTOP_VALIDATION.md)
-- [发布说明](docs/DESKTOP_RELEASE.md)
-- [原 CLI 接入与 DSH 插件](docs/HOST_SETUP.md)
-- [独立 EasyTier 网络](docs/EASYTIER.md)
-- [协议说明](docs/PROTOCOL.md)
+## 文档
 
-电脑身份、证书和设备记录保存在当前用户的 `.ai-maid-cafe/desktop`，再次启动可复用。只分发原始工具包，不要复制该私有数据目录。局域网访问和远程中转均保留 TLS 验证。本机管理界面仅绑定 127.0.0.1，使用每次启动生成的随机管理凭据。
+- [电脑助手操作指南](docs/DESKTOP_GUIDE.md)
+- [协议](docs/PROTOCOL.md)
+- [四平台离线部署](docs/FOUR_PLATFORM_OFFLINE.md)
+- [EasyTier 网络](docs/EASYTIER.md)
+- [工作区发现与会话同步](docs/automatic-sync-and-push.md)
+- [Harmony Push V3](docs/HARMONY_PUSH_V3.md)
+
+Windows 上已进行 Codex 和 DSH 真实任务联调；macOS/Linux 原生操作、其他平台及签名真机推送仍须在对应环境验收。自动测试通过不代表所有平台都已完成真实任务验收。

@@ -60,9 +60,11 @@ Windows 可通过 Git for Windows 提供 OpenSSL，助手支持其默认安装�
 
 再次启动时沿用已有 hostId 与 CA；保存配置会签发新的服务证书，不重新创建电脑身份。网关运行时不能保存配置。要修改设置，先确认任务已结束，再点击“停止网关”。已登记工作区或会话的数据会保留，修改项目目录不会删除历史记录。
 
+既有配置的 `dataDir` 可以与 `host.config.json` 所在目录不同。保存名称不会更改或迁移该路径；桌面管理器与网关从相同数据目录读取 SQLite、运行时登记和锁文件。
+
 本机管理接口使用每次启动生成的随机凭据，只绑定回环地址，并检查 Host / Origin。不把凭据放入查询参数或远程资源。浏览器关闭后二维码不持久保存在浏览器；主动下载的 PNG / JSON 仍应妥善保管。
 
-DSH 额外需要加载 `plugins/dsh-bridge/index.mjs`，配置 `gatewayUrl: ws://127.0.0.1:8898`、向导显示的 `tokenFile` 路径和实测 `hostVersion`。手机凭据和桥接凭据互不通用。
+DSH 额外需要加载完整 `plugins/dsh-bridge/` 包（`cordis.mjs` 入口），配置 `gatewayUrl: ws://127.0.0.1:8898`、向导显示的 `tokenFile` 路径；默认使用 `compatibilityMode: latest-compatible`，能力按宿主契约探测。手机凭据和桥接凭据互不通用。
 
 ## 排查
 
@@ -79,6 +81,11 @@ DSH 额外需要加载 `plugins/dsh-bridge/index.mjs`，配置 `gatewayUrl: ws:/
 ```text
 npm run desktop
 npm run package:desktop
+node scripts/package-desktop.mjs --offline --out <新的隔离目录>
 ```
 
 打包输出在 `dist/desktop/<时间戳>/`，包括三份独立 ZIP、解压后的目录、`manifest.json` 和 `SHA256SUMS.txt`。打包采用明确目录白名单，仅打包运行时依赖，保留第三方依赖的许可证文件。每次使用新目录，不覆盖旧产物。Node.js 和 OpenSSL 是外部依赖，ZIP 本身不是带系统签名的原生安装程序。
+
+默认是基础管理工具包，不是四平台完整离线包。`--offline` 要求真实锁定且已安装的目标 SDK/client/CLI、peer 和传递依赖完整；缺包在创建输出前报 BLOCKED，不联网或自动安装。完整模式仍不捆绑 Node、OpenSSL、Codex 和 DSH 宿主，也不代表真实原生控制通过。三系统按制作机器当前 Node 架构核查平台 optional 依赖；跨架构应在对应架构制作并复验。详细边界见 [四平台离线部署](FOUR_PLATFORM_OFFLINE.md)。
+
+解压目录内运行 `npm run check:offline` 或 `node scripts/check-offline-readiness.mjs --json`。基础包缺少目标 SDK 时该检查预期 BLOCKED。检查仅读取本地锁元数据与安装清单，不执行安装或原生程序。`distribution-manifest.json` 给出实际依赖物理路径、版本、锁摘要和文件 SHA256；`nativeControlVerified:false` 必须保持，不把依赖检查当作登录、模型、审批或停止验收。

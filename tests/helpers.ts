@@ -8,7 +8,7 @@ import type { AgentAdapter, AdapterContext, Command, Decision, Interaction, Mode
 export class TestAdapter implements AgentAdapter {
   engineId='codex' as const;epoch=1;context:AdapterContext;submitted=0;decisions=0;
   constructor(context:AdapterContext){this.context=context;}
-  async probe(){return{id:this.engineId,runtimeInstanceId:this.context.runtimeInstanceId,version:'test-double',installed:true,authentication:'ready' as const,verified:false,detail:'TEST DOUBLE',capabilities:{text:true,image:true,files:true,history:true,permission:true,questions:true,cancelScope:'turn',models:true},models:[{providerId:'openai',modelId:'test-model',label:'test-model'}]};}
+  async probe(){return{id:this.engineId,runtimeInstanceId:this.context.runtimeInstanceId,version:'test-double',installed:true,authentication:'ready' as const,verified:false,detail:'TEST DOUBLE',controlCapabilities:{create:true,submit:true,observe:true,approve:true,answer:true,cancel:true,resume:true,configure:true},capabilities:{text:true,image:true,files:true,history:true,permission:true,questions:true,cancelScope:'turn',models:true},models:[{providerId:'openai',modelId:'test-model',label:'test-model'}]};}
   async createSession(){return{nativeSessionId:'same-native-id'};}
   async resumeSession(){}
   async submit(s:Session,input:Submission){this.submitted++;this.context.emit(s.id,'run.updated',{state:'running',nativeAccepted:true});}
@@ -22,5 +22,5 @@ export async function fixture(hostId='test-host'){
   const store=new Store(join(dir,'console.sqlite'));const core=new Core(store,hostId,[root]);const adapter=new TestAdapter(core.context('codex'));core.adapters.set('codex',adapter);const w=await core.registerWorkspace(a,'A');const wb=await core.registerWorkspace(b,'B');const s=await core.createSession('device','create-1',w.id,'codex');
   return{dir,root,store,core,adapter,w,wb,s,close:async()=>{await core.drain();store.close();await rm(dir,{recursive:true,force:true});}};
 }
-export function command(s:Session,action='submit',payload:Record<string,unknown>={text:'Update README',attachmentIds:[]}):Command{return{protocolVersion:1,hostId:s.ref.hostId,clientRequestId:randomUUID(),sessionId:s.id,ref:s.ref,action:action as Command['action'],payload};}
+export function command(s:Session,action='submit',payload:Record<string,unknown>={text:'Update README',attachmentIds:[]}):Command{return{protocolVersion:2,hostId:s.ref.hostId,clientRequestId:randomUUID(),sessionId:s.id,ref:s.ref,action:action as Command['action'],payload:{expectedGeneration:s.binding?.generation??s.epoch,...(action==='cancel'?{runId:s.runId}:{}),...payload}};}
 export const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));

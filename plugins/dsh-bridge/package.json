@@ -2,7 +2,9 @@
   "name": "ai-maid-cafe-dsh-bridge",
   "version": "0.2.0",
   "type": "module",
-  "main": "index.mjs",
-  "description": "Read-only verified DSH rc.5 history bridge, protocol 2",
-  "dependencies": { "ws": "8.22.2" }
+  "main": "cordis.mjs",
+  "description": "Capability-negotiated DSH same-host controller, native tools and durable admission bridge",
+  "dependencies": {
+    "ws": "8.22.2"
+  }
 }

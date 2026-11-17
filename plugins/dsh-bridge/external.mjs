@@ -1,14 +1,14 @@
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { mapDurable } from './mapping.mjs';
+import { sessionRows, humanUserEvent } from './features.mjs';
 
 export function externalHandlers(ctl, observed, instanceId) {
   const pages=new Map();
   async function check(p){
     if(p.instanceId!==instanceId)throw new Error('DSH host generation changed');
-    const rows=await ctl.list({},AbortSignal.timeout(30000));
-    if(!Array.isArray(rows.items)||rows.items.length>5000)throw new Error('DSH list exceeds snapshot budget');
-    const row=rows.items.find(r=>r.sessionId===p.sessionId&&r.origin!=='subagent');
+    const rows=sessionRows(await ctl.list({},AbortSignal.timeout(30000)));
+    const row=rows.find(r=>r.sessionId===p.sessionId&&r.origin!=='subagent');
     if(!row?.cwd||await realpath(row.cwd)!==p.cwd)throw new Error('DSH external project identity changed');
   }
   return {
@@ -17,10 +17,9 @@ export function externalHandlers(ctl, observed, instanceId) {
       let snapshot;
       if(p.cursor){snapshot=pages.get(p.cursor);pages.delete(p.cursor);if(!snapshot||snapshot.cwd!==p.cwd||snapshot.expires<Date.now())throw new Error('DSH discovery cursor expired');}
       else {
-        const rows=await ctl.list({},AbortSignal.timeout(30000));
-        if(!Array.isArray(rows.items)||rows.items.length>5000)throw new Error('DSH list exceeds snapshot budget');
+        const rows=sessionRows(await ctl.list({},AbortSignal.timeout(30000)));
         const items=[];
-        for(const r of rows.items){if(!r.cwd||r.origin==='subagent')continue;const cwd=await realpath(r.cwd).catch(()=>'');if(cwd===p.cwd)items.push({nativeId:r.sessionId,cwd,title:'DSH '+r.sessionId});}
+        for(const r of rows){if(!r.cwd||r.origin==='subagent')continue;const cwd=await realpath(r.cwd).catch(()=>'');const title=typeof r.title==='string'?r.title:r.title?.title;if(cwd===p.cwd)items.push({nativeId:r.sessionId,cwd,title:title||'DSH '+r.sessionId});}
         snapshot={items,cwd:p.cwd,expires:Date.now()+60000};
       }
       const items=snapshot.items.slice(0,50);snapshot.items=snapshot.items.slice(50);let cursor;
@@ -43,7 +42,7 @@ export function externalHandlers(ctl, observed, instanceId) {
         if(!page.hasMore){
           const items=[];let prior=-1;
            for(const r of records){const e=r.event;if(r.type!=='event'||!e||!Number.isSafeInteger(e.seq)||e.seq!==prior+1||e.seq>throughSeq)throw new Error('DSH event order or waterline mismatch');prior=e.seq;
-            if(e.type==='user/message'){
+            if(e.type==='user/message'&&humanUserEvent(e)){
               if(!Array.isArray(e.data.content))throw new Error('Malformed DSH user content');
               items.push({nativeEventId:String(e.seq)+':user',role:'user',text:e.data.content.filter(c=>c.type==='text'&&typeof c.text==='string').map(c=>c.text).join('\n')});
             }else if(e.type==='assistant/message'||e.type==='assistant/attempt'){

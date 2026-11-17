@@ -1,0 +1,46 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { addresses, saveHost, type SetupInput } from '../../apps/desktop/src/host.ts';
+import { DesktopService } from '../../apps/desktop/src/service.ts';
+import { RuntimeManager } from '../../apps/desktop/src/runtime.ts';
+import { command, fixture } from '../helpers.ts';
+
+test('renaming config in A keeps identity, paired devices, history, workspaces and runtime registration in B', { timeout: 120000 }, async () => {
+  const f = await fixture();
+  try {
+    const root = join(f.dir, 'config-A');
+    await mkdir(root);
+    const input: SetupInput = { name: 'Original', mode: 'lan', address: addresses()[0].address, workspace: f.root, runtimes: { codex: { command: process.execPath, enabled: true } } };
+    const initial = await saveHost(root, input);
+    initial.dataDir = f.dir;
+    await writeFile(join(root, 'host.config.json'), JSON.stringify(initial));
+    const ca = await readFile(initial.caFile, 'utf8');
+    const paired = f.store.redeem(f.store.ticket().token, 'Existing phone');
+    f.core.accept('device', command(f.s)); await f.core.drain();
+    const session = f.store.get('session', f.s.id), history = f.store.history(f.s.id, Number.MAX_SAFE_INTEGER);
+    assert.ok(history.length);
+    const manager = new RuntimeManager(f.dir, { version: async () => 'codex-cli 0.169.0', codexHandshake: async () => {}, launchCodex: async () => process.pid });
+    const runtime = await manager.start('codex', { command: 'codex', expectedVersion: 'codex-cli 0.169.0' });
+    const saved = await saveHost(root, { ...input, name: 'Renamed' });
+    assert.equal(saved.dataDir, f.dir);
+    assert.equal(saved.hostId, initial.hostId);
+    assert.equal(saved.caFile, initial.caFile);
+    assert.equal(await readFile(saved.caFile, 'utf8'), ca);
+    assert.equal(saved.runtimes['deepseek-harness'].bridgeTokenFile, initial.runtimes['deepseek-harness'].bridgeTokenFile);
+    assert.deepEqual(saved.allowedWorkspaceRoots, initial.allowedWorkspaceRoots);
+    const service = new DesktopService(root);
+    service.runtimes = new RuntimeManager(root, manager.hooks);
+    const state = await service.state();
+    assert.equal(service.runtimes.root, f.dir);
+    assert.equal(state.runtimeStates[0].runtimeInstanceId, runtime.runtimeInstanceId);
+    assert.deepEqual(await service.runtimes.registration('codex'), runtime);
+    assert.equal(f.store.authenticate(paired.token), paired.deviceId);
+    assert.deepEqual(f.store.get('session', f.s.id), session);
+    assert.deepEqual(f.store.history(f.s.id, Number.MAX_SAFE_INTEGER), history);
+    assert.deepEqual(f.store.get('workspace', f.w.id), f.w);
+    await assert.rejects(access(join(root, 'console.sqlite')));
+    await assert.rejects(access(join(root, 'codex.runtime.json')));
+  } finally { await f.close(); }
+});

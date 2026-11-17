@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "AI Maid Café command v1",
+  "title": "AI Maid Café command v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,7 +14,7 @@
   ],
   "properties": {
     "protocolVersion": {
-      "const": 1
+      "const": 2
     },
     "hostId": {
       "type": "string",
@@ -83,11 +83,81 @@
         "submit",
         "cancel",
         "decide",
-        "configure"
+        "configure",
+        "slash",
+        "steer"
       ]
     },
     "payload": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "expectedGeneration"
+      ],
+      "properties": {
+        "expectedGeneration": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "cancel"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "runId"
+            ],
+            "properties": {
+              "runId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "decide"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "interactionId"
+            ],
+            "properties": {
+              "interactionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              },
+              "answer": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

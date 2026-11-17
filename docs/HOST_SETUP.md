@@ -42,17 +42,17 @@ Codex 该版本来自本次源码环境的协议生成器，**没有因此被标
 
 网关另在 `127.0.0.1:8898` 接收本机桥接，只接受 `dsh-bridge.secret` 对应的凭据。手机 token 不能登录桥接端口，桥接凭据不能登录手机接口。
 
-在 DSH 宿主将 `plugins/dsh-bridge/index.mjs` 作为本地插件加载，配置：
+在 DSH 宿主将完整 `plugins/dsh-bridge/` 包（入口 `cordis.mjs`）作为本地插件加载，配置：
 
 ```json
 {
   "gatewayUrl": "ws://127.0.0.1:8898",
   "tokenFile": "/absolute/private/path/dsh-bridge.secret",
-  "hostVersion": "SET_EXACT_TESTED_DSH_VERSION"
+  "compatibilityMode": "latest-compatible"
 }
 ```
 
-插件使用宿主提供的 `sessionController`、`session/event`、`agent/assistant-stream`、`approval/request` 和 `user-questions/request`。接口参考固定在 DSH 提交 `fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`。用户问题的返回结构和原生版本需要真实宿主验收，不把模拟消息测试等同于兼容性确认。
+插件通过 Cordis 服务注入等待 `sessionController`，在卸载或热重载时释放连接与监听。默认按宿主服务身份、方法能力及运行时数据契约接入，不再要求固定 rc.5 文件哈希。未知版本仍报告 `verified:false`；缺少可选服务只关闭对应能力。详情及接口见 [DSH 接入说明](DSH_INTEGRATION_2026-11-17.md)。
 
 DSH 退出仅断开此适配器。网关本身不由 DSH 插件托管。
 
@@ -87,13 +87,9 @@ External sending, approvals, answers, cancellation, configuration and continuati
 
 ### Mac Runtime Confirmation
 
-Run the upgraded gateway on the Mac with Node 24.13+ below 25, keeping the existing protected host configuration and data. Pin Codex expectedVersion to the complete local output `codex-cli 0.167.0-alpha.4.1`; do not replace it with alpha.4 or 0.167.1 to get past a gate. Pin DSH expectedVersion to `0.2.1-rc.5`, the verified controller package version. Keep Claude/OpenCode enabled:false while uninstalled. Do not recreate host identity, CA, pairing or the database.
+升级统一网关、协议包、适配器及完整 `plugins/dsh-bridge/` 目录，保留现有主机配置、SQLite、CA、配对信息及桥接密钥。旧 `dist/desktop`、`output/AMC-computerside` 打包副本不会随源码自动更新。
 
-Load the complete bridge directory within the existing DSH rc.5 host profile, with ws 8 available and the official controller package resolvable from profile.mjs. Its only plugin settings are gatewayUrl (local ws://127.0.0.1:8898) and tokenFile (existing protected bridge secret path). Do not send that file, config or credentials to support. If plugin resolution finds a second/different controller copy, the instanceof/digest check intentionally fails; install it in the same dependency context as the loaded service, not beside an arbitrary global CLI. No automatic Mac file update or SSH is provided.
-
-After reconnecting, inspect the authenticated GET /v1/external-capabilities response using an existing authorized client. Do not paste authorization headers/tokens. Codex must report profile `codex-app-server-0.167.0-alpha.4.1`; DSH must report `dsh-controller-0.2.1-rc.5-page-v2`, a nonempty namespace, discover/history supported, syncMode manual-refresh, and all control actions unverified. The DSH bridge probe reports externalProtocol 2, control false, and controllerDigest `a9801acb577b03053c5d5a3191ff555c5f1d791d0acddec113bea4511e33b386`. These confirm negotiated implementation support, not successful user-history or task E2E. No history is read by the probe. Only select a disposable authorized workspace/session when explicitly ready to test reads.
-
-The controller digest was computed from the official npm tarball after checking SHA512 `9kcolv2E00fuMMXWDbMn4K2JRMdAf8Ql5wME1CaGxgManvLjPM2Ymc46o2TJnwH4kO2gUtVKUrP9hcreHd148g==`. Source tag dsh-v0.2.1-rc.5 resolves to `b830ec950faba0a46dda564be3e2d854afed94f1`; the older fcc0ad4 source reports 0.2.2-rc.1 and is not rc.5 evidence. This is an authenticated local plugin/API check, not adversarial binary attestation or proof about other independently running processes.
+DSH 默认 `latest-compatible`，无需把 `expectedVersion` 改写成旧 rc.5 来通过检查。仅在确实需要固定包版本时，使用 `compatibilityMode: "pinned"` 和准确的 controller `expectedVersion`，并在网关和插件两侧一致配置。新 profile 是 `dsh-controller-capabilities-v2`；哈希只作为诊断，不作为默认接入门槛。支持能力不等于真实引擎/真机验证。
 
 ### Phone Model Selection
 
@@ -101,6 +97,6 @@ The 2026-11-13 phone probe received one workspace, four runtimes and zero regist
 
 On the Mac, use the existing protected configuration locally to register only exact native-supported `providerId`, `modelId` and a display `label` under the Codex runtime's `models`. Obtain the identity from that installed runtime's own metadata/API and active provider; do not infer it from the model label, artwork, CLI version, this document, or another provider. Do not share the configuration, credentials or a full bootstrap response. Restart the gateway after configuration changes, then use the phone's model/workspace refresh action. No automatic model discovery or private configuration rewrite was performed by this fix.
 
-The observed DSH descriptor still advertised model control, unlike the updated read-only adapter. Upgrade `apps/gateway/src/core.ts`, the protocol package, adapters and complete `plugins/dsh-bridge/` together from this source tree; old `dist/desktop` and `output/AMC-computerside` copies are not updated deployment artifacts. The phone rejects rc.5 model control even when an older host advertises it. Do not add DSH models to unlock it. Keep Claude/OpenCode disabled while uninstalled.
+DSH 现在从宿主 `modelCatalog`（或原生 LLM registry）获取模型，只有真实 `selectModel` 返回确认身份才更新会话模型。不需要在主机配置中猜测 DSH 模型 ID。现有手机页面根据服务端能力和目录显示模型，无需修改页面；slash 和 steer 的新增协议入口不新增 UI。
 
 Home selection persists a new-session target, not a native-confirmed model. Chat selection applies only to an idle managed session and, for Codex, the confirmed thread provider. An external imported session has no control lease. Running/waiting/cancel-requested/uncertain sessions remain disabled. A configure receipt is not model confirmation: the updated gateway notifies the catalog after persisting the next-turn target; the phone resubscribes for a snapshot, and only native model confirmation changes the current model. Updating only the APK will not repair missing host registration or the old gateway's missing notification.

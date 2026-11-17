@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Core } from './core.ts';
 import type { ConsoleEvent, EngineId, ExternalCandidate, ExternalPage, ExternalProfile, Session } from '../../../packages/protocol/src/types.ts';
-import { ENGINES } from '../../../packages/protocol/src/types.ts';
+import { ENGINES, NO_CONTROL } from '../../../packages/protocol/src/types.ts';
 import type { ExternalSessionProvider } from '../../../packages/adapters/common/external.ts';
 import { closedProfile } from '../../../packages/adapters/common/external.ts';
 import { canonical, inside } from './files.ts';
@@ -148,7 +148,7 @@ export class ExternalSessions {
     if (previous) return this.core.session(previous.sessionId);
     const sessionId = randomUUID();
     const s: Session = { id: sessionId, ref: { hostId: this.core.hostId, workspaceId: c.workspaceId, engineId: c.engineId, runtimeInstanceId: c.source.namespace, nativeSessionId: c.source.nativeId },
-      title: c.title, cwd: c.cwd, state: 'idle', epoch: 0, messages: [], tools: [], agents: [], interactions: [], watermark: 0, historyStart: 1, updatedAt: Date.now(), externalSource: c.source };
+      title: c.title, cwd: c.cwd, state: 'uncertain', epoch: 0, binding:{runtimeInstanceId:c.source.namespace,nativeSessionId:c.source.nativeId,generation:0,state:'unbound',capabilities:{...NO_CONTROL,observe:true},reason:'Historical messages do not establish native execution state or control ownership'}, messages: [], tools: [], agents: [], interactions: [], watermark: 0, historyStart: 1, updatedAt: Date.now(), externalSource: c.source };
     this.core.store.transaction(() => { this.core.store.put('session', sessionId, s); this.core.store.put('external-import-v1', id, { sessionId }); });
     this.core.emit('catalog.changed');
     return s;
@@ -182,6 +182,7 @@ export class ExternalSessions {
   }
   private async syncPage(sessionId: string, cursor?: string, automatic = false, signal?: AbortSignal, validate?: (page: ExternalPage) => void) {
     const s = this.core.session(sessionId); requireValue(s.externalSource, 'source_missing', 'Not an external projection', 409);
+    requireValue(!s.binding||s.binding.state==='unbound','source_attached','Native-bound sessions must reconcile through their owning adapter',409);
     const id = digest(stable([this.core.hostId, s.ref.engineId, s.externalSource.namespace, s.externalSource.nativeId]));
     const candidate = this.core.store.get<ExternalCandidate>('external-candidate-v1', id);
     requireValue(candidate && stable(candidate.source) === stable(s.externalSource) && candidate.workspaceId === s.ref.workspaceId, 'source_changed', 'Projection source identity or profile changed', 409);

@@ -1,0 +1,36 @@
+{
+  "fixtureVersion": 1,
+  "engine": "deepseek-harness",
+  "version": "session-controller-0.2.1-rc.5",
+  "provenance": "synthetic-plan-appendix-D-F",
+  "nativeVerified": false,
+  "sessionId": "dsh-offline-actual",
+  "runId": "request-offline-1",
+  "create": { "request": { "method": "create", "params": { "cwd": "/srv/work/offline", "sessionId": "dsh-suggested" } }, "response": { "sessionId": "dsh-offline-actual" } },
+  "submit": { "request": { "method": "prompt", "params": { "requestId": "request-offline-1", "sessionId": "dsh-offline-actual", "mode": "queue", "content": [{ "type": "text", "text": "Run controlled tests." }], "clientTimeZone": "Asia/Shanghai" } }, "response": { "accepted": true } },
+  "events": [
+    { "type": "event", "event": { "type": "turn/start", "seq": 1, "time": 1794787200001, "data": { "turn": 1 } } },
+    { "type": "assistant-stream", "frame": { "type": "start", "attemptId": "attempt-1", "revision": 1, "startedAfterSeq": 1, "turn": 1, "step": 1 } },
+    { "type": "assistant-stream", "frame": { "type": "chunk", "attemptId": "attempt-1", "revision": 1, "index": 0, "time": 1794787200002, "chunk": { "type": "text-delta", "text": "Tests " } } },
+    { "type": "event", "event": { "type": "tool/call", "seq": 2, "time": 1794787200003, "data": { "turn": 1, "step": 1, "callId": "tool-1", "name": "shell", "arguments": "{\"command\":\"node --test\"}" } } },
+    { "type": "event", "event": { "type": "tool/result", "seq": 3, "time": 1794787200004, "data": { "turn": 1, "step": 1, "message": { "toolCallId": "tool-1", "content": "1 test passed" } } } },
+    { "type": "assistant-stream", "frame": { "type": "end", "attemptId": "attempt-1", "revision": 1, "index": 1, "outcome": { "kind": "committed", "eventType": "assistant/message", "seq": 4 } } },
+    { "type": "event", "event": { "type": "assistant/message", "seq": 4, "time": 1794787200005, "data": { "turn": 1, "step": 1, "message": { "role": "assistant", "content": "Tests passed." }, "stream": [{ "type": "text-chunks", "texts": ["Tests passed."] }] } } },
+    { "type": "event", "event": { "type": "turn/end", "seq": 5, "time": 1794787200006, "data": { "turn": 1, "reason": { "kind": "completed" } } } }
+  ],
+  "approvals": [
+    { "request": { "event": "approval/request", "toolName": "shell", "callId": "tool-1", "reason": "Run tests" }, "response": "allowed-once" },
+    { "request": { "event": "approval/request", "toolName": "shell", "callId": "tool-2", "reason": "Remove protected file" }, "response": "rejected" }
+  ],
+  "question": { "request": { "event": "user-questions/request", "questions": [{ "id": "test_scope", "question": "Which tests?", "options": [{ "label": "All" }, { "label": "Unit" }], "multiSelect": false }], "wait": { "callId": "ask-1", "timed": false } }, "response": { "answers": [{ "id": "test_scope", "selected": ["All"] }] } },
+  "cancelRace": { "request": { "method": "cancel", "params": { "sessionId": "dsh-offline-actual" } }, "terminalBeforeResponse": { "type": "event", "event": { "type": "turn/end", "seq": 5, "time": 1794787200006, "data": { "turn": 1, "reason": { "kind": "completed" } } } }, "response": { "accepted": true } },
+  "continuation": { "request": { "method": "prompt", "params": { "requestId": "request-offline-2", "sessionId": "dsh-offline-actual", "mode": "queue", "content": [{ "type": "text", "text": "Explain the previous result." }] } }, "response": { "accepted": true } },
+  "recovery": {
+    "follow": { "address": { "kind": "session", "sessionId": "dsh-offline-actual" }, "maxMessages": 100, "assistantStream": true },
+    "snapshot": { "type": "snapshot", "header": { "version": 1, "id": "dsh-offline-actual", "createdAt": 1794787200000, "cwd": "/srv/work/offline", "isSeeded": false }, "cursor": 5, "records": [], "hasMore": true, "projections": { "asOfSeq": 5, "values": {} } },
+    "page": { "address": { "kind": "session", "sessionId": "dsh-offline-actual" }, "throughSeq": 5, "beforeSeq": 5, "maxMessages": 100 },
+    "pendingInboxAfterCancel": ["host-owned-request-2"],
+    "bridgeReconnectGeneration": 3,
+    "hostReplacementGeneration": 4
+  }
+}

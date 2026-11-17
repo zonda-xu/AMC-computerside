@@ -10,6 +10,7 @@ import QRCode from 'qrcode';
 import { Store, digest } from '../../gateway/src/store.ts';
 import { addresses, commands, engines, hostDefaults, opensslCommand, readConfig, saveHost, system, validHostname, type HostConfig, type SetupInput } from './host.ts';
 import { probeRuntime } from './host.ts';
+import { RuntimeManager } from './runtime.ts';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
 async function body(req: IncomingMessage) {
@@ -21,11 +22,11 @@ export function verifyEndpoint(config: HostConfig, endpoint = config.publicEndpo
   return new Promise<{ ok: boolean; detail: string }>(async resolveResult => {
     try {
       const ca = await readFile(config.caFile);
-      const request = httpsRequest(new URL('/v1/hello', endpoint), { ca, timeout: 6000 }, response => {
+      const request = httpsRequest(new URL('/v2/hello', endpoint), { ca, timeout: 6000 }, response => {
         let data = ''; response.setEncoding('utf8');
         response.on('data', chunk => { data += chunk; if (data.length > 32768) request.destroy(new Error('响应过大')); });
         response.on('end', () => {
-          try { const value = JSON.parse(data); const ok = response.statusCode === 200 && value.hostId === config.hostId && value.data?.hostId === config.hostId;
+          try { const value = JSON.parse(data); const ok = response.statusCode === 200 && value.protocolVersion === 2 && value.hostId === config.hostId && value.data?.hostId === config.hostId;
             resolveResult({ ok, detail: ok ? 'TLS 证书和主机身份校验通过。' : '入口返回了其他主机或无效响应，请检查端口映射。' });
           } catch { resolveResult({ ok: false, detail: '入口没有返回有效的网关信息。' }); }
         });
@@ -48,15 +49,22 @@ export class DesktopService {
   root: string; token = randomBytes(32).toString('base64url'); child?: ChildProcess;
   ready = false; busy = false; lastError = ''; gatewayLog = ''; authority = '';
   pairingHash = '';
-  constructor(root: string) { this.root = resolve(root); }
-  async config() { return readConfig(this.root); }
+  runtimes: RuntimeManager;
+  constructor(root: string) { this.root = resolve(root); this.runtimes = new RuntimeManager(this.root); }
+  async config() {
+    const config = await readConfig(this.root);
+    const dataDir = resolve(config?.dataDir ?? this.root);
+    if (this.runtimes.root !== dataDir) this.runtimes = new RuntimeManager(dataDir, this.runtimes.hooks);
+    return config;
+  }
   async state() {
     const config = await this.config();
     let devices: unknown[] = [], pairingUsed = false;
     if (config) { const store = new Store(join(config.dataDir, 'console.sqlite')); try { devices = store.devices(); pairingUsed = !!store.db.prepare('SELECT used FROM tickets WHERE hash=? AND used=1').get(this.pairingHash); } finally { store.close(); } }
-    return { ...hostDefaults(), home: homedir(), root: this.root, running: this.ready, busy: this.busy, error: this.lastError, devices, pairingUsed,
+    const runtimeStates = config ? await Promise.all((['codex', 'opencode'] as const).map(engine => this.runtimes.probe(engine, config.runtimes[engine]))) : [];
+    return { protocolVersion: 2, ...hostDefaults(), home: homedir(), root: this.root, running: this.ready, busy: this.busy, error: this.lastError, devices, pairingUsed, runtimeStates,
       config: config ? { name: config.name, hostId: config.hostId, address: config.listen, endpoint: config.publicEndpoint,
-        workspace: config.allowedWorkspaceRoots[0], runtimes: config.runtimes,
+        workspace: config.allowedWorkspaceRoots[0], runtimes: Object.fromEntries(engines.map(engine => { const runtime = config.runtimes[engine]; return [engine, { command: runtime.command, expectedVersion: runtime.expectedVersion, enabled: runtime.enabled, endpoint: engine === 'codex' ? runtime.endpoint : undefined }]; })),
         fingerprint: new X509Certificate(await readFile(config.caFile)).fingerprint256 } : null };
   }
   async exclusive<T>(fn: () => Promise<T>) {
@@ -112,7 +120,7 @@ export class DesktopService {
       store.db.prepare('DELETE FROM tickets WHERE used=0').run();
       const { token, expiresAt } = store.ticket();
       this.pairingHash = digest(token);
-      const ticket = { type: 'ai-maid-cafe/pair', protocolVersion: 1, hostId: config.hostId, name: config.name, os: config.os,
+       const ticket = { type: 'ai-maid-cafe/pair', protocolVersion: 2, hostId: config.hostId, name: config.name, os: config.os,
         endpoint: config.publicEndpoint, caPem, ticket: token, expiresAt };
       return { ticket, qr: await QRCode.toDataURL(JSON.stringify(ticket), { errorCorrectionLevel: 'L', width: 1000, margin: 4 }) };
     } finally { store.close(); }
@@ -126,22 +134,34 @@ export class DesktopService {
     return { revoked: true };
   }
   async api(path: string, method: string, input: any) {
-    if (path === '/api/state' && method === 'GET') return this.state();
+    if (path === '/v2/state' && method === 'GET') return this.state();
     if (method !== 'POST') throw new Error('不支持的请求。');
     switch (path) {
-      case '/api/check': {
+      case '/v2/check': {
         let openssl = ''; try { openssl = await opensslCommand(); } catch { /* Return an actionable missing dependency. */ }
         return { node: process.versions.node, openssl, addresses: addresses(), commands };
       }
-      case '/api/probe': return probeRuntime(input.engine, input.command);
-      case '/api/save': return this.save(input);
-      case '/api/start': return this.start();
-      case '/api/stop': return this.exclusive(async () => { await this.stop(); return { running: false }; });
-      case '/api/pair': return this.pair();
-      case '/api/revoke': return this.revoke(input.id);
-      case '/api/verify': { const config = await this.config(); if (!config || !this.ready) throw new Error('请先启动网关。'); return verifyEndpoint(config); }
-      case '/api/network': return networkFiles(input.publicHost, input.secret || randomBytes(32).toString('base64url'));
-      case '/api/folders': {
+      case '/v2/probe': {
+        const result = await probeRuntime(input.engine, input.command);
+        const config = await this.config();
+        const engine: unknown = input.engine;
+        return { ...result, runtime: config && (engine === 'codex' || engine === 'opencode') ? await this.runtimes.probe(engine, config.runtimes[engine]) : undefined };
+      }
+      case '/v2/runtime/start': return this.exclusive(async () => {
+        const engine: unknown = input.engine;
+        if (engine !== 'codex' && engine !== 'opencode') throw new Error('Unsupported managed runtime');
+        const config = await this.config(); if (!config) throw new Error('Save host configuration first');
+        await this.runtimes.start(engine, config.runtimes[engine]);
+        return this.runtimes.probe(engine, config.runtimes[engine]);
+      });
+      case '/v2/save': return this.save(input);
+      case '/v2/start': return this.start();
+      case '/v2/stop': return this.exclusive(async () => { await this.stop(); return { running: false }; });
+      case '/v2/pair': return this.pair();
+      case '/v2/revoke': return this.revoke(input.id);
+      case '/v2/verify': { const config = await this.config(); if (!config || !this.ready) throw new Error('请先启动网关。'); return verifyEndpoint(config); }
+      case '/v2/network': return networkFiles(input.publicHost, input.secret || randomBytes(32).toString('base64url'));
+      case '/v2/folders': {
         const path = resolve(typeof input.path === 'string' ? input.path : homedir());
         if (!(await stat(path)).isDirectory()) throw new Error('该路径不是目录。');
         const entries = await readdir(path, { withFileTypes: true });
@@ -157,7 +177,7 @@ export class DesktopService {
       res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
       if (req.headers.host !== this.authority || (req.headers.origin && req.headers.origin !== `http://${this.authority}`)) { res.writeHead(403).end(); return; }
       const path = new URL(req.url || '/', `http://${this.authority}`).pathname;
-      if (path.startsWith('/api/')) {
+      if (path.startsWith('/v2/')) {
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         if (req.headers.authorization !== `Bearer ${this.token}`) { res.writeHead(401).end(JSON.stringify({ error: '请从本机启动入口重新打开向导。' })); return; }
         try {

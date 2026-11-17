@@ -12,7 +12,7 @@ const probeResults = new Map();
 const nextLabels = ['继续，选择连接方式 →', '继续，接入 AI 终端 →', '保存配置，进入配对 →', '查看已配对设备 →', '返回配对页面'];
 function notice(message = '', info = false) { $('#notice').textContent = message; $('#notice').classList.toggle('info', info); $('#notice').hidden = !message; }
 async function api(path, data) {
-  const response = await fetch('/api/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(path === 'save' ? 120000 : 25000) });
+  const response = await fetch('/v2/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(path === 'save' ? 120000 : 25000) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '操作没有完成，请重试。');
   return result;
@@ -70,6 +70,16 @@ function buildRuntimes() {
     const input = row.querySelector('input:not([type=checkbox])'); input.value = config?.command || commandDefaults[id];
     if (docs[id]) { const link = document.createElement('a'); link.href = docs[id]; link.textContent = '安装与登录说明'; link.target = '_blank'; link.rel = 'noreferrer'; row.querySelector('.runtime-heading').append(link); }
     row.querySelector('button').addEventListener('click', event => void action(event.currentTarget, () => probe(id), '检测中…'));
+    if (id === 'codex' || id === 'opencode') {
+      const start = document.createElement('button'); start.className = 'secondary'; start.textContent = '显式启动 / 登记共享运行时';
+      start.addEventListener('click', event => void action(event.currentTarget, async () => {
+        if (!state.config || input.value.trim() !== state.config.runtimes[id].command) throw new Error('请先保存当前程序配置。');
+        const result = await api('runtime/start', { engine: id });
+        row.querySelector('.runtime-status').textContent = `${result.state} · ${result.runtimeInstanceId || ''} · generation ${result.generation || ''} · ${result.detail}`;
+        await refresh();
+      }));
+      row.querySelector('.runtime-body').append(start);
+    }
     const update = () => { row.querySelector('.runtime-body').hidden = !enabled.checked; updateDsh(); };
     enabled.addEventListener('change', update);
     input.addEventListener('input', () => { probeResults.delete(id); row.querySelector('.runtime-status').textContent = '路径已修改，请重新检测。'; row.querySelector('.runtime-status').className = 'runtime-status'; });
@@ -86,7 +96,7 @@ async function probe(id) {
   const row = $(`[data-engine="${id}"]`), output = row.querySelector('.runtime-status');
   output.textContent = '正在读取 --version 输出…';
   const result = await api('probe', { engine: id, command: $(`#command-${id}`).value.trim() }); probeResults.set(id, result);
-  output.textContent = result.installed ? `已检测到 ${result.version} · 登录与真实任务待验证` : result.detail;
+  output.textContent = result.installed ? `${result.version} · ${result.detail}${result.runtime ? ' · ' + result.runtime.state + ' · ' + result.runtime.detail : ''}` : result.detail;
   output.className = 'runtime-status ' + (result.installed ? 'pass' : 'fail'); updateDsh();
   return result;
 }
@@ -111,6 +121,10 @@ async function advance() {
   } else if (step === 3) showStep(4); else showStep(3);
 }
 function updateState() {
+  for (const runtime of state.runtimeStates || []) {
+    const output = $(`[data-engine="${runtime.engine}"] .runtime-status`);
+    if (output) output.textContent = `${runtime.state} · ${runtime.version || ''} · ${runtime.runtimeInstanceId || '未登记'} · generation ${runtime.generation || '-'} · ${runtime.detail}`;
+  }
   $('#gateway-dot').classList.toggle('online', state.running);
   $('#gateway-status').textContent = state.running ? '网关正在运行' : '网关尚未启动'; $('#stop').hidden = !state.running;
   if (state.config) {

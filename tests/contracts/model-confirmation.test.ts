@@ -5,37 +5,14 @@ import { CodexAdapter } from '../../packages/adapters/codex/index.ts';
 import { OpenCodeAdapter } from '../../packages/adapters/opencode/index.ts';
 import { DshAdapter } from '../../packages/adapters/deepseek-harness/index.ts';
 import { ClaudeCodeAdapter } from '../../packages/adapters/claude-code/index.ts';
-import type { StdioRpc } from '../../packages/adapters/common/rpc.ts';
+import type { WebSocketRpc } from '../../packages/adapters/common/ws-rpc.ts';
+import { nativeContext } from './fixtures/native-context.ts';
 
-test('OpenCode creation uses configured native confirmation and caches actual options', async () => {
-  const f = await fixture();
-  try {
-    const selected = { providerId: 'deepseek', modelId: 'v4pro', label: 'Requested' };
-    for (const current of [undefined, 'deepseek/v4.1flash', 'deepseek/v4pro', 'deepseek/']) {
-      const a = new OpenCodeAdapter('opencode', { command: 'unused', expectedVersion: 'not-run' }, f.adapter.context);
-      mock.method(a, 'connection', async () => {
-        const rpc = { request: async (method: string) => method === 'session/new' ? { sessionId: 'new-native', configOptions: [{ id: 'model', currentValue: 'stale/model' }] } : { configOptions: current === undefined ? [] : [{ id: 'model', currentValue: current }] } };
-        a.rpc = rpc as unknown as StdioRpc; return rpc;
-      });
-      if (!current || current === 'deepseek/') await assert.rejects(() => a.createSession('new', f.w, selected), /not confirmed/);
-      else { const created = await a.createSession('new', f.w, selected); assert.equal(created.model?.modelId, current.split('/')[1]); assert.equal(a.configOptions.get('new')?.[0].currentValue, current); }
-    }
-  } finally { await f.close(); }
+test('OpenCode v2 creation reports only native confirmed model identity', async t => {
+  const f=nativeContext('opencode');const a=new OpenCodeAdapter('opencode',{command:'unused',expectedVersion:''},f.context);t.mock.method(a,'connection',async()=>{});t.mock.method(a,'http',async()=>({data:{id:'native',model:{id:'actual',providerID:'provider'}}}));assert.equal((await a.createSession('new',f.workspace,{providerId:'provider',modelId:'requested',label:'Requested'})).model?.modelId,'actual');
 });
 
-test('Claude reservation stays pending and native init confirms identity without losing differing target', async () => {
-  const f = await fixture();
-  try {
-    const a = new ClaudeCodeAdapter('claude-code', { command: 'unused', expectedVersion: 'not-run', env: { CLAUDE_CONFIG_DIR: f.dir } }, f.adapter.context);
-    mock.method(a, 'checkVersion', async () => {});
-    const created = await a.createSession('new', f.w, { providerId: 'anthropic', modelId: 'requested', label: 'Requested' }); assert.equal(Object.hasOwn(created, 'model'), false);
-    const target = { providerId: 'anthropic', modelId: 'requested', label: 'Requested' };
-    const pending = f.core.session(f.s.id); pending.nextModel = target; f.store.put('session', pending.id, pending);
-    mock.method(a.live, 'get', () => ({ active: false }));
-    a.frame(pending.id, { type: 'system', subtype: 'init', model: 'actual' }); assert.equal(f.core.session(pending.id).model?.modelId, 'actual'); assert.deepEqual(f.core.session(pending.id).nextModel, target);
-    a.frame(pending.id, { type: 'system', subtype: 'init', model: 'requested' }); assert.equal(f.core.session(pending.id).nextModel, undefined);
-  } finally { await f.close(); }
-});
+test('Claude missing official SDK fails closed instead of reserving a synthetic native session', async()=>{const f=nativeContext('claude-code');const a=new ClaudeCodeAdapter('claude-code',{command:process.execPath,expectedVersion:'',sdkModule:'amc-contract-missing-sdk'},f.context);await assert.rejects(a.createSession('new',f.workspace),/official SDK unavailable/);assert.equal(a.live.size,0);});
 
 test('Codex creation never invents missing native identity', async () => {
   const f = await fixture();
@@ -44,7 +21,7 @@ test('Codex creation never invents missing native identity', async () => {
       const a = new CodexAdapter('codex', { command: 'unused', expectedVersion: 'not-run' }, f.adapter.context);
       mock.method(a, 'connection', async () => {
         const rpc = { request: async () => ({ thread: { id: 'native' }, modelProvider: model ? 'openai' : undefined, model }) };
-        a.rpc = rpc as unknown as StdioRpc; return rpc;
+        a.rpc = rpc as unknown as WebSocketRpc; return rpc;
       });
       assert.equal((await a.createSession('new', f.w, { providerId: 'openai', modelId: 'requested', label: 'Requested' })).model?.modelId, model);
     }
@@ -56,7 +33,8 @@ test('DSH missing selectModel confirmation remains pending', async () => {
   try {
     const a = new DshAdapter('deepseek-harness', { command: 'unused', expectedVersion: 'not-run' }, f.adapter.context);
     mock.method(a, 'checkVersion', async () => {}); mock.method(a, 'call', async (method: string) => method === 'create' ? { sessionId: 'new-native' } : {});
-    assert.equal((await a.createSession('new', f.w, { providerId: 'deepseek', modelId: 'v4pro', label: 'Requested' })).model, undefined);
+    assert.equal((await a.createSession('new', f.w)).model, undefined);
+    await assert.rejects(a.createSession('other',f.w,{providerId:'deepseek',modelId:'requested',label:'Requested'}),/model selection was not confirmed/);
   } finally { await f.close(); }
 });
 
@@ -105,6 +83,7 @@ test('creating Codex leaves the existing DSH run intact and submission respects 
   const f = await fixture();
   try {
     const dsh = new DshAdapter('deepseek-harness', { command: 'unused', expectedVersion: 'not-run' }, f.core.context('deepseek-harness'));
+    mock.method(dsh,'probe',async()=>({id:'deepseek-harness' as const,runtimeInstanceId:dsh.context.runtimeInstanceId,version:'fixture',installed:true,authentication:'ready' as const,verified:false,detail:'Synthetic contract only',capabilities:{text:true,image:false,files:false,history:true,permission:true,questions:true,cancelScope:'turn',models:false},controlCapabilities:dsh.control,models:[]}));
     mock.method(dsh, 'createSession', async () => ({ nativeSessionId: 'dsh-native' })); f.core.adapters.set('deepseek-harness', dsh);
     const old = await f.core.createSession('device', 'old-dsh', f.w.id, 'deepseek-harness'); dsh.context.emit(old.id, 'run.updated', { state: 'running', runId: 'old-task' }); const ref = f.core.session(old.id).ref;
     const next = await f.core.createSession('device', 'new-codex', f.w.id, 'codex'); assert.equal(next.ref.engineId, 'codex'); assert.deepEqual(f.core.session(old.id).ref, ref); assert.equal(f.core.session(old.id).state, 'running');

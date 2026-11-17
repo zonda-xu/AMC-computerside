@@ -11,9 +11,8 @@ interface Thread { id: string; cwd: string; preview: string; name?: string }
 interface Threads { data: Thread[]; nextCursor?: string }
 interface Content { type: string; text?: string }
 interface Item { type: string; id: string; text?: string; content?: Content[]; summary?: string[] }
-interface Turn { id: string; items: Item[]; itemsView: string }
-interface Turns { data: Turn[]; nextCursor?: string }
-interface ThreadRead { thread: Thread }
+interface Turn { id: string; items: Item[] }
+interface ThreadRead { thread: Thread & {turns:Turn[]} }
 export class CodexExternalProvider implements ExternalSessionProvider {
   engineId: 'codex' = 'codex';
   adapter: CodexAdapter;
@@ -21,9 +20,9 @@ export class CodexExternalProvider implements ExternalSessionProvider {
   async profile(): Promise<ExternalProfile> {
     const runtime = await this.adapter.probe();
     const p = closedProfile(this.engineId, runtime.version, 'No verified exclusive writer termination evidence; create a separate gateway-managed session');
-    const supported = runtime.version === 'codex-cli 0.167.0-alpha.4.1' || runtime.version === 'codex-cli 0.167.1';
+    const supported = runtime.version === 'codex-cli 0.169.0';
     if (!runtime.installed || !supported || this.adapter.config.expectedVersion !== runtime.version) {
-      const reason = 'Codex external history requires an enabled installed runtime, exact expectedVersion, and a verified 0.167.0-alpha.4.1 or 0.167.1 protocol profile';
+      const reason = 'Codex external history requires an enabled installed runtime and exact expectedVersion codex-cli 0.169.0';
       p.discover = { state: 'unverified', reason }; p.history = p.discover; p.observe = p.discover;
       return p;
     }
@@ -31,8 +30,8 @@ export class CodexExternalProvider implements ExternalSessionProvider {
     const source = createHash('sha256').update(home + '\0' + this.adapter.config.command).digest('hex');
     p.profile = 'codex-app-server-' + runtime.version.slice('codex-cli '.length); p.namespace = this.adapter.context.runtimeInstanceId + ':' + source;
     p.coverage = 'user text, assistant text, reasoning summaries; no attachments, tools or approvals'; p.syncMode = 'manual-refresh';
-    p.discover = { state: 'supported', reason: 'Native thread/list with cwd and opaque pagination; exact release protocol metadata, alpha.4.1 source d2c035639366e0bf2c316aa2065c24aabc12bcdc' };
-    p.history = { state: 'supported', reason: 'Native thread/read metadata and paginated thread/turns/list; no resume or turn/start' };
+    p.discover = { state: 'supported', reason: 'Native thread/list with cwd and opaque pagination; target rust-v0.169.0, native validation still required' };
+    p.history = { state: 'supported', reason: 'Native thread/read with includeTurns; no resume or turn/start, no legacy turns-list assumptions' };
     p.observe = { state: 'supported', reason: 'Explicit manual history refresh, not live process attachment' };
     return p;
   }
@@ -45,14 +44,14 @@ export class CodexExternalProvider implements ExternalSessionProvider {
   }
   async history(cwd: string, nativeId: string, cursor?: string): Promise<ExternalPage> {
     requireValue((await this.profile()).history.state === 'supported', 'external_unverified', 'Codex history profile unavailable', 409);
+    requireValue(cursor===undefined,'external_cursor','Codex 0.169 thread/read history does not accept a legacy turn-page cursor',409);
     const rpc = await this.adapter.connection(cwd);
-    const read = await rpc.request<ThreadRead>('thread/read', { threadId: nativeId, includeTurns: false });
+    const read = await rpc.request<ThreadRead>('thread/read', { threadId: nativeId, includeTurns: true });
     requireValue(read.thread.id === nativeId && read.thread.cwd === cwd, 'source_changed', 'Codex source project identity changed', 409);
-    const r = await rpc.request<Turns>('thread/turns/list', { threadId: nativeId, cursor, limit: 25, sortDirection: 'asc', itemsView: 'full' });
-    requireValue(Array.isArray(r.data) && r.data.length <= 25 && (r.nextCursor == null || typeof r.nextCursor === 'string'), 'external_format', 'Invalid Codex history page');
+    requireValue(Array.isArray(read.thread.turns)&&read.thread.turns.length<=2000,'external_truncated','Codex thread/read history is missing or exceeds budget');
     const items: ExternalMessage[] = [];
-    for (const turn of r.data) {
-      requireValue(typeof turn.id === 'string' && !!turn.id && turn.itemsView === 'full' && Array.isArray(turn.items) && turn.items.length <= 2000, 'external_truncated', 'Codex history page is incomplete or exceeds budget');
+    for (const turn of read.thread.turns) {
+      requireValue(typeof turn.id === 'string' && !!turn.id && Array.isArray(turn.items) && turn.items.length <= 2000, 'external_truncated', 'Codex history is incomplete or exceeds budget');
       for (const i of turn.items) {
         requireValue(typeof i.id === 'string' && !!i.id, 'external_format', 'Codex item identity is missing');
         const key = turn.id + ':' + i.id;
@@ -64,6 +63,6 @@ export class CodexExternalProvider implements ExternalSessionProvider {
         }
       }
     }
-    return { items, cursor: r.nextCursor || undefined };
+    return { items };
   }
 }
