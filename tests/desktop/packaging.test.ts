@@ -112,6 +112,14 @@ test('isolated base distribution retains closure layout, exact lock, file hashes
 test('synthetic complete offline distribution passes its own relocated check without claiming native verification', async () => {
   const f = await fixture();
   try {
+    const platforms: Partial<Record<NodeJS.Platform, [string, string, NodeJS.Platform]>> = {
+      win32: ['Windows', 'Start-Windows.cmd', 'win32'],
+      darwin: ['macOS', 'Start-macOS.command', 'darwin'],
+      linux: ['Linux', 'Start-Linux.sh', 'linux']
+    };
+    const platform = platforms[process.platform];
+    assert.ok(platform, 'Packaging fixture needs a supported desktop platform');
+    if (process.platform === 'linux') await f.pkg('node_modules/native-linux', 'native-linux', '1.0.0', { os: ['linux'], cpu: [process.arch] });
     const targets = [
       ['@anthropic-ai/claude-agent-sdk', '0.3.325', 'sha512-MhSm2Fhk3DA/hhjdCKXDZWlnykpPWJjX42SogllAHMplY9ZKT+Ltb8QPtQxpe225Imfs4A8IKaNE4biivA+fHg=='],
       ['@opencode/client', '2.3.0', 'sha512-xu74XGiYIqLZ2FzIrtjaR5UNWWXY3fRln0WLgZoQTR/wWMgG+T9XGQQGCl8ry8jnCFsJVokiHemBqft9oMzC1A=='],
@@ -122,8 +130,8 @@ test('synthetic complete offline distribution passes its own relocated check wit
     f.packages['node_modules/@anthropic-ai/claude-agent-sdk'].peerDependencies = { '@anthropic-ai/sdk': '>=0.93.0', '@modelcontextprotocol/sdk': '^1.29.0', zod: '^4.0.0' };
     await f.saveLock();
     await copySources(f.root);
-    const result = await packageDesktop({ project: f.root, out: join(f.root, 'isolated-offline'), offline: true, platforms: [['Windows', 'Start-Windows.cmd', 'win32']], arch: 'x64' });
-    const folder = join(result.out, 'AI-Maid-Cafe-Windows');
+    const result = await packageDesktop({ project: f.root, out: join(f.root, 'isolated-offline'), offline: true, platforms: [platform], arch: process.arch });
+    const folder = join(result.out, 'AI-Maid-Cafe-' + platform[0]);
     const moved = join(f.root, 'relocated'); await cp(folder, moved, { recursive: true });
     await rm(folder, { recursive: true });
     const { stdout } = await promisify(execFile)(process.execPath, ['scripts/check-offline-readiness.mjs', '--json'], { cwd: moved });
@@ -131,6 +139,7 @@ test('synthetic complete offline distribution passes its own relocated check wit
     assert.equal(report.ready, true); assert.equal(report.nativeVerified, false);
     const manifest = JSON.parse(await readFile(join(moved, 'distribution-manifest.json'), 'utf8'));
     assert.equal(manifest.mode, 'four-platform-offline'); assert.equal(manifest.nativeControlVerified, false);
+    assert.equal(manifest.platform, process.platform); assert.equal(manifest.arch, process.arch);
     for (const [name, version] of targets) assert.ok(manifest.dependencies.some((pkg: { name: string; version: string }) => pkg.name === name && pkg.version === version));
   } finally { await f.close(); }
 });

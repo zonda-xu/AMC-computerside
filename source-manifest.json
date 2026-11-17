@@ -684,8 +684,8 @@
     },
     {
       "path": "tests/desktop/packaging.test.ts",
-      "bytes": 10379,
-      "sha256": "28c4d594132793b0f4c4e7506d17fb25e1e3f96534ed0d6d1f5c9754d7db2f73"
+      "bytes": 10998,
+      "sha256": "f8cfc8ead9e201e4f5d2e785341a5ce7744b30efd146116a1ca9e3c39fcd6697"
     },
     {
       "path": "tests/desktop/runtime.test.ts",
