@@ -83,8 +83,10 @@ export class DesktopService {
   async start() {
     return this.exclusive(async () => {
       if (this.ready) return { running: true };
-      if (!await this.config()) throw new Error('请先保存电脑配置。');
+      const config = await this.config();
+      if (!config) throw new Error('请先在连接助手选择本机 IP、授权项目和 AI 平台，保存配置后启动网关。');
       this.lastError = ''; this.gatewayLog = '';
+      let listenFailure = '';
       const child = spawn(process.execPath, [fileURLToPath(new URL('../../gateway/src/main.ts', import.meta.url)), join(this.root, 'host.config.json')], {
         windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
         env: process.env
@@ -94,13 +96,23 @@ export class DesktopService {
       child.stderr?.on('data', data => { this.gatewayLog = (this.gatewayLog + data.toString()).slice(-4000); });
       child.on('exit', code => {
         if (this.child === child) { this.ready = false; this.child = undefined;
-          if (code) this.lastError = '网关退出。请检查 IP、8899 / 8898 端口占用，或是否有另一份网关正在运行。'; }
+          if (code) this.lastError = listenFailure || (this.gatewayLog.includes('A gateway already runs for this OS user')
+            ? '当前用户已有网关在运行。请在原连接助手中停止网关后重试。'
+            : '网关退出。请检查主机配置、证书和数据目录是否可用。'); }
       });
       await new Promise<void>((resolveReady, reject) => {
         const timer = setTimeout(() => { child.kill(); reject(new Error('网关启动超时，请检查本机网络。')); }, 15000);
         child.once('error', () => { clearTimeout(timer); reject(new Error('无法启动网关进程。')); });
         child.once('exit', () => { clearTimeout(timer); reject(new Error(this.lastError || '网关启动失败。请检查 IP 和端口占用。')); });
-        child.on('message', message => { if ((message as { type?: string }).type === 'ready') { clearTimeout(timer); this.ready = true; resolveReady(); } });
+        child.on('message', message => {
+          const event = message as { type?:string; code?:string; port?:number };
+          if (event.type === 'ready') { clearTimeout(timer); this.ready = true; resolveReady(); }
+          if (event.type !== 'listen-failed' || (event.port !== 8898 && event.port !== config.port)) return;
+          const endpoint = event.port === 8898 ? 'DSH 桥接 127.0.0.1:8898' : `手机网关 ${config.listen}:${config.port}`;
+          if (event.code === 'EADDRINUSE') listenFailure = `${endpoint} 已被占用。请停止占用此端口的旧服务后重试。`;
+          if (event.code === 'EADDRNOTAVAIL') listenFailure = `${endpoint} 的 IP 当前不可用。请检查网络并在连接助手中重新选择本机地址。`;
+          if (event.code === 'EACCES') listenFailure = `系统拒绝监听 ${endpoint}。请检查端口保留及本机权限。`;
+        });
       });
       return { running: this.ready };
     });
@@ -173,7 +185,8 @@ export class DesktopService {
         const result = await probeRuntime(input.engine, input.command);
         const config = await this.config();
         const engine: unknown = input.engine;
-        return { ...result, runtime: config && (engine === 'codex' || engine === 'opencode') ? await this.runtimes.probe(engine, config.runtimes[engine]) : undefined };
+        const saved = config && (engine === 'codex' || engine === 'opencode') ? config.runtimes[engine] : undefined;
+        return { ...result, runtime: saved?.command === result.command && (engine === 'codex' || engine === 'opencode') ? await this.runtimes.probe(engine, saved) : undefined };
       }
       case '/v2/runtime/start': return this.exclusive(async () => {
         const engine: unknown = input.engine;

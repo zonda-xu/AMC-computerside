@@ -1,13 +1,15 @@
-import { createHash } from 'node:crypto';
-import type { AgentAdapter, Decision, Interaction, ModelIdentity, Session, Submission, Workspace } from '../../protocol/src/types.ts';
-import { AdapterBase } from '../common/base.ts';
+import { createHash, randomUUID } from 'node:crypto';
+import type { AgentAdapter, Decision, ExternalCapability, Interaction, ModelIdentity, Session, Submission, Workspace } from '../../protocol/src/types.ts';
+import { AdapterBase, checkRuntimePolicy } from '../common/base.ts';
 import type { RpcMessage } from '../common/rpc.ts';
 import { WebSocketRpc } from '../common/ws-rpc.ts';
 import { ACTIVE } from '../../protocol/src/types.ts';
 import { catalogModel, uniqueModels } from '../common/models.ts';
+import { codexControls, initializeCodex, listCodexThreads, readCodexMethods, readCodexHistoryPage, type CodexMethods } from './protocol.ts';
+import { matchesPinnedVersion } from '../../protocol/src/compatibility.ts';
 type Native = Record<string, any>;
 export interface CodexThreadSnapshot {
-  thread: { id: string; cwd: string; model?: string | null; modelProvider?: string; status: { type: string }; turns: Array<{ id: string; status: string; error?: unknown; items: Array<{ type: string; id: string; text?: string; [key: string]: unknown }> }> };
+  thread: { id: string; cwd: string; historyMode?: string; model?: string | null; modelProvider?: string; status: { type: string }; turns: Array<{ id: string; status: string; error?: unknown; itemsView?: string; items: Array<{ type: string; id: string; text?: string; [key: string]: unknown }> }> };
   model?: string;
   modelProvider?: string;
 }
@@ -15,7 +17,39 @@ type Completion={state:'completed'|'failed'|'cancelled'|'uncertain';reason:strin
 interface PendingApproval { method: string; params: Native; sessionId: string; rpc?: WebSocketRpc; interactionId?: string }
 export class CodexAdapter extends AdapterBase implements AgentAdapter {
    connectionIdentity?:string; connectionEndpoint?:string;
-  control={create:true,submit:true,observe:true,approve:true,answer:true,cancel:true,resume:true,configure:true,attach:true};
+  private methods?: CodexMethods;
+  get control(){return codexControls(this.methods, this.rpc?.unavailableMethods);}
+  private historyCheck?: { rpc: WebSocketRpc; until: number; result: Promise<{ discover: ExternalCapability; history: ExternalCapability }> };
+  historyAccess(rpc: WebSocketRpc) {
+    if (this.historyCheck?.rpc === rpc && this.historyCheck.until > Date.now()) return this.historyCheck.result;
+    const result = this.inspectHistory(rpc);
+    this.historyCheck = { rpc, until: Date.now() + 5000, result };
+    return result;
+  }
+  private async inspectHistory(rpc: WebSocketRpc) {
+    const supported = (reason: string): ExternalCapability => ({ state:'supported', reason });
+    const unavailable = (reason: string): ExternalCapability => ({ state:'unverified', reason });
+    let discover = unavailable('Codex 缺少 thread/list'), history = unavailable('Codex 缺少 thread/read');
+    let example: { id:string; cwd:string } | undefined;
+    try {
+      example = (await listCodexThreads(rpc, 1)).data[0];
+      discover = supported('thread/list 已返回有效会话列表');
+    } catch (error) { discover = unavailable(String(error)); }
+    if (rpc.unavailableMethods?.has('thread/read')) return { discover, history };
+    if (this.methods) {
+      if (this.methods.requests.has('thread/read')) history = supported('本机 app-server 协议包含 thread/read');
+    } else {
+      const id = example?.id ?? randomUUID();
+      try {
+        const result = await rpc.request<CodexThreadSnapshot>('thread/read', { threadId: id, includeTurns:false }, 5000);
+        if (example && result?.thread?.id === id && result.thread.cwd === example.cwd) history = supported('thread/read 已返回匹配的会话标识');
+      } catch (error) {
+        history = !example && /thread .*not found|thread not found|no rollout found|no recorded rollout/i.test(String(error))
+          ? supported('thread/read 已处理空目录中的只读查询') : unavailable(String(error));
+      }
+    }
+    return { discover, history };
+  }
   async listModels(workspace?:Workspace):Promise<ModelIdentity[]>{return this.cachedModels(workspace?.path||'',()=>this.readModelCatalog(workspace));}
   async readModelCatalog(workspace?:Workspace):Promise<ModelIdentity[]>{
     const rpc=await this.connection(workspace?.path||'');
@@ -41,9 +75,15 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     try{return await this.connecting;}finally{this.connecting=undefined;}
   }
   createRpc(cwd:string){if(!this.config.endpoint)throw new Error('Shared Codex app-server endpoint is not configured; no private process will be started');if(!this.config.runtimeIdentity)throw new Error('Codex shared app-server incarnation identity is not registered; endpoint alone cannot identify a restarted runtime');return new WebSocketRpc(this.config.endpoint);}
-  async checkVersion(){if(this.config.expectedVersion!=='codex-cli 0.169.0')throw new Error('Codex shared runtime requires the rust-v0.169.0 protocol target and exact codex-cli 0.169.0 version');await super.checkVersion();}
+  async checkVersion() {
+    if (this.config.registeredVersion && this.config.runtimeIdentity) {
+      checkRuntimePolicy(this.config, this.config.registeredVersion);
+      if (!this.observedVersion) await super.probe();
+    }
+    else await super.checkVersion();
+  }
    async connect(cwd:string){
-     if(this.rpc){if(this.connectionIdentity!==this.config.runtimeIdentity||this.connectionEndpoint!==this.config.endpoint)throw new Error('Codex shared app-server registration changed; reconnect explicitly');return this.rpc;}
+     if(this.rpc){checkRuntimePolicy(this.config,this.config.registeredVersion || this.observedVersion);if(this.connectionIdentity!==this.config.runtimeIdentity||this.connectionEndpoint!==this.config.endpoint)throw new Error('Codex shared app-server registration changed; reconnect explicitly');return this.rpc;}
     if(this.config.enabled===false)throw new Error('Codex runtime disabled');
     await this.checkVersion();
      const nativeIdentity=this.config.runtimeIdentity;const endpoint=this.config.endpoint;const rpc=this.createRpc(cwd);this.rpc=rpc;
@@ -51,8 +91,12 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     rpc.on('request',(m:RpcMessage)=>{if(this.rpc===rpc)this.request(m);});
      const invalidate=(e:Error)=>{if(this.rpc!==rpc)return;this.rpc=undefined;this.loaded.clear();this.clearApprovals();this.context.disconnect?.([...this.byNative.values()],e.message);rpc.close();for(const id of this.byNative.values())this.fault(id,e);if(!this.closed&&this.byNative.size)void this.reconnect();};
     rpc.on('fault',invalidate);
-    try{await rpc.request('initialize',{clientInfo:{name:'ai_maid_cafe',title:'AI Maid Café',version:'0.1.0'},capabilities:{experimentalApi:true,requestAttestation:false}});
-     if(this.rpc!==rpc||nativeIdentity!==this.config.runtimeIdentity||endpoint!==this.config.endpoint)throw new Error('Codex connection lost or registration changed during initialization');rpc.notify('initialized');this.connectionIdentity=nativeIdentity;this.connectionEndpoint=endpoint;this.epoch=this.context.openConnection(undefined,nativeIdentity);return rpc;}catch(e){invalidate(e instanceof Error?e:new Error(String(e)));throw e;}
+    try{await initializeCodex(rpc, this.env.CODEX_HOME);
+     this.methods = undefined;
+     if (this.observedVersion && (!this.config.registeredVersion || matchesPinnedVersion(this.observedVersion, this.config.registeredVersion))) {
+       this.methods = await readCodexMethods(this.config.command, this.env).catch(() => undefined);
+     }
+     if(this.rpc!==rpc||nativeIdentity!==this.config.runtimeIdentity||endpoint!==this.config.endpoint)throw new Error('Codex connection lost or registration changed during initialization');this.connectionIdentity=nativeIdentity;this.connectionEndpoint=endpoint;this.epoch=this.context.openConnection(undefined,nativeIdentity);return rpc;}catch(e){invalidate(e instanceof Error?e:new Error(String(e)));throw e;}
   }
   async reconnect(){if(this.reconnecting)return;this.reconnecting=true;try{let delay=250;while(!this.closed){await new Promise<void>(resolve=>{const timer=setTimeout(resolve,delay);timer.unref();});if(this.closed)return;try{for(const id of this.byNative.values())await this.resumeSession(this.context.getSession(id));return;}catch(e){for(const id of this.byNative.values())this.fault(id,e);delay=Math.min(delay*2,10000);}}}finally{this.reconnecting=false;}}
   async createSession(id:string,w:Workspace,model?:ModelIdentity){
@@ -103,7 +147,18 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
      if(s.binding?.nativeIdentity&&s.binding.nativeIdentity!==nativeIdentity)throw new Error('Codex session belongs to a different app-server identity');
      const owner=this.byNative.get(s.ref.nativeSessionId);if(owner&&owner!==s.id)throw new Error('Codex native thread is already managed by another session');
      const endpoint=this.config.endpoint;const rpc=await this.connection(s.cwd);
-     const read=await rpc.request<CodexThreadSnapshot>('thread/read',{threadId:s.ref.nativeSessionId,includeTurns:true});
+     const first = await readCodexHistoryPage(rpc, s.ref.nativeSessionId, s.cwd);
+     const read = first.snapshot;
+     const seen = new Set<string>();
+     let cursor = first.cursor;
+     while (cursor) {
+       if (seen.has(cursor) || seen.size >= 40 || read.thread.turns.length >= 2000) throw new Error('Codex native history exceeds pagination budget');
+       seen.add(cursor);
+       const page = await readCodexHistoryPage(rpc, s.ref.nativeSessionId, s.cwd, cursor);
+       if (read.thread.turns.length + page.snapshot.thread.turns.length > 2000) throw new Error('Codex native history exceeds pagination budget');
+       read.thread.turns.push(...page.snapshot.thread.turns);
+       cursor = page.cursor;
+     }
      if(this.rpc!==rpc||this.config.runtimeIdentity!==nativeIdentity||this.connectionIdentity!==nativeIdentity||this.config.endpoint!==endpoint||this.connectionEndpoint!==endpoint)throw new Error('Codex registered app-server connection changed during verification');
      if(read.thread?.id!==s.ref.nativeSessionId||read.thread.cwd!==s.cwd)throw new Error('Codex native thread cwd or identity does not match the authorized session');
      if(!['idle','active','notLoaded'].includes(read.thread.status?.type))throw new Error('Codex saved thread is not available for verified resume');
@@ -215,7 +270,31 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     }
     if(m.method==='error')emit('error',{message:p.error?.message||JSON.stringify(p)});
   }
-  async probe(){const result=await super.probe();if(!result.installed||result.version!=='codex-cli 0.169.0'||result.version!==this.config.expectedVersion){result.detail='Codex control unavailable: exact configured and installed codex-cli 0.169.0 is required; protocol target is unverified';return result;}try{await this.connection('');result.installed=true;result.controlCapabilities=this.control;result.generation=this.epoch;result.connectionState='attached';result.nativeIdentity=this.config.runtimeIdentity;result.detail='Connected to configured shared app-server at exact target version; authentication and model execution require native validation';result.capabilities={text:true,image:false,files:false,history:true,permission:true,questions:true,cancelScope:'thread + turn',models:true};try{result.models=await this.listModels();}catch(error){result.capabilities.models=false;result.detail+='; model catalog unavailable: '+String(error);}}catch(e){result.detail=e instanceof Error?e.message:String(e);}return result;}
+  async probe() {
+    const result = await super.probe();
+    if (this.config.registeredVersion && this.config.runtimeIdentity) result.version = this.config.registeredVersion;
+    else if (!result.installed) return result;
+    try {
+      checkRuntimePolicy(this.config, result.version);
+      const rpc = await this.connection('');
+      result.installed = true;
+      const access = await this.historyAccess(rpc);
+      const nativeSessionApi = this.methods || access.discover.state === 'supported' || access.history.state === 'supported';
+      const control = nativeSessionApi ? this.control : { create:false, submit:false, observe:false, approve:false, answer:false, cancel:false, resume:false, attach:false, configure:false };
+      result.controlCapabilities = control;
+      result.generation = this.epoch;
+      result.connectionState = 'attached';
+      result.nativeIdentity = this.config.runtimeIdentity;
+      result.detail = '共享 app-server 已完成原生握手。';
+      result.capabilities = { text:control.submit, image:false, files:false, history:false, permission:control.approve, questions:control.answer, cancelScope:control.cancel ? 'thread + turn' : 'unavailable', models:false };
+      result.capabilities.history = access.history.state === 'supported';
+      if (access.discover.state !== 'supported') result.detail += ' 会话列表不可用：' + access.discover.reason;
+      if (!result.capabilities.history) result.detail += ' 历史读取不可用：' + access.history.reason;
+      try { result.models = await this.listModels(); result.capabilities.models = true; }
+      catch (error) { result.detail += ' 模型目录不可用：' + String(error); }
+    } catch (error) { result.detail = (error as Error).message; }
+    return result;
+  }
   async releaseSession(s: Session) {
     const native = s.ref.nativeSessionId;
     if (this.byNative.get(native) !== s.id) return;

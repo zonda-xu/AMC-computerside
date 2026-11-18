@@ -22,7 +22,7 @@ class SyntheticRpc extends EventEmitter {
   async request(method: string, params: { threadId?: string; clientUserMessageId?: string; model?: string }) {
     this.calls.push({ method, params });
     this.beforeReply?.(method);
-    if (method === 'initialize') return {};
+    if (method === 'initialize') return { userAgent: 'codex-fixture' };
     if (method === 'thread/settings/update') { this.snapshot.thread.model=params.model; return {}; }
     if (method === 'turn/start') {
       if (this.loseStart) throw new Error('Synthetic lost acknowledgement');
@@ -169,7 +169,7 @@ test('Codex authorized adoption verifies native cwd, runtime registration and ac
   assert.equal(f.adapter.byNative.size, 0); assert.equal(f.session.binding, undefined);
   const binding = await f.adapter.attachExistingSession(f.session, 'registered-server');
   assert.equal(binding.nativeIdentity, 'registered-server'); assert.equal(f.context.getSession(f.session.id).binding?.state, 'attached');
-  assert.deepEqual(f.rpc.calls.map(call => call.method), ['initialize', 'thread/read', 'thread/read', 'thread/resume']);
+  assert.deepEqual(f.rpc.calls.map(call => call.method), ['initialize', 'thread/read', 'thread/read', 'thread/read', 'thread/read', 'thread/resume']);
   assert.equal(f.rpc.calls.some(call => ['thread/start', 'turn/start'].includes(call.method)), false);
 });
 

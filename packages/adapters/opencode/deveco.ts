@@ -20,7 +20,6 @@ export class DevEcoCodeAdapter extends OpenCodeAdapter {
   private nextRead=new Map<string,number>();
   private requested=new Map<string,string>();
   constructor(config:RuntimeConfig,ctx:AdapterContext,serviceRoot:string){super('opencode',config,ctx);this.serviceRoot=serviceRoot;}
-  async checkVersion(){if(this.config.enabled===false)throw Error('DevEco Code 未启用');}
   async discover(){
     const service=await devEcoEndpoint(this.serviceRoot,this.config);
     const response=await fetch(service.url+'/doc',{headers:service.headers,redirect:'error',signal:AbortSignal.timeout(5000)});

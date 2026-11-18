@@ -21,6 +21,6 @@ await writeFile(ext,`basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digit
 await run('openssl',['x509','-req','-in',csr,'-CA',ca,'-CAkey',cakey,'-CAcreateserial','-out',cert,'-days','365','-sha256','-extfile',ext]);
 for(const p of [cakey,key])await chmod(p,0o600);
 const bridgeTokenFile=join(dir,'dsh-bridge.secret');await writeFile(bridgeTokenFile,randomBytes(32).toString('hex'),{mode:0o600});
-const runtimes=Object.fromEntries(['codex','claude-code','opencode','deepseek-harness'].map(id=>[id,{command:id==='claude-code'?'claude':id==='deepseek-harness'?'dsh':id,expectedVersion:'SET_EXACT_NATIVE_VERSION_OUTPUT',models:[],...(id==='deepseek-harness'?{bridgeTokenFile}:{})}]));
+const runtimes=Object.fromEntries(['codex','claude-code','opencode','deepseek-harness'].map(id=>[id,{command:id==='claude-code'?'claude':id==='deepseek-harness'?'dsh':id,compatibilityMode:'latest-compatible',expectedVersion:'',models:[],...(id==='deepseek-harness'?{bridgeTokenFile}:{})}]));
 await writeFile(v.out!,JSON.stringify({hostId,name:v.name,os:platform(),listen:v.address,port:8899,publicEndpoint:`https://${v.public}:${v['public-port']}`,dataDir:dir,caFile:ca,certFile:cert,keyFile:key,allowedWorkspaceRoots:v['workspace-root']!.map(p=>resolve(p)),runtimes,automation},null,2)+'\n',{mode:0o600,flag:'wx'});
-console.log(`Created ${v.out}. Configure exact native versions and model identities before running the gateway. Private CA keys stay on this host.`);
+console.log(`Created ${v.out}. Configure the local runtimes and register their services before starting the gateway. Private CA keys stay on this host.`);

@@ -1,5 +1,29 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from 'node:path';
+import type { EngineId } from '../../protocol/src/types.ts';
+
+type Command = { command: string; args: string[] };
+const exec = promisify(execFile);
+
+export async function supportsCodexListen(native: Command, env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { stdout, stderr } = await exec(native.command, [...native.args, 'app-server', '--help'],
+    { env, timeout: 10000, maxBuffer: 131072, windowsHide: true });
+  return /(?:^|\s)--listen(?:[\s=<]|$)/m.test(stdout + '\n' + stderr);
+}
+
+export async function readCliVersion(engine: EngineId, native: Command, env: NodeJS.ProcessEnv): Promise<string> {
+  try {
+    const { stdout } = await exec(native.command, [...native.args, '--version'], { env, timeout: 10000, maxBuffer: 65536, windowsHide: true });
+    const label = stdout.trim();
+    if (label) return label;
+    throw new Error('CLI did not report a version');
+  } catch (error) {
+    if (engine === 'codex' && await supportsCodexListen(native, env).catch(() => false)) return 'unknown';
+    throw error;
+  }
+}
 
 // Execute npm's Windows JS entry point directly. Never pass user paths through cmd.exe.
 export function nativeCommand(command: string, os = process.platform, searchPath = process.env.PATH || process.env.Path || ''): { command: string; args: string[] } {

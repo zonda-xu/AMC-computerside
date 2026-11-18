@@ -5,7 +5,8 @@ import { access, chmod, mkdir, readFile, realpath, rename, stat, writeFile } fro
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { hostname, networkInterfaces, platform } from 'node:os';
 import { isIP } from 'node:net';
-import { nativeCommand } from '../../../packages/adapters/common/command.ts';
+import { nativeCommand, readCliVersion, supportsCodexListen } from '../../../packages/adapters/common/command.ts';
+import { checkRuntimePolicy } from '../../../packages/adapters/common/base.ts';
 import { isDevEco } from '../../../packages/adapters/opencode/deveco-service.ts';
 import { nativeEnvironment } from '../../../packages/adapters/common/rpc.ts';
 import type { EngineId } from '../../../packages/protocol/src/types.ts';
@@ -73,18 +74,14 @@ export async function probeRuntime(engine: EngineId, command: string) {
       native = { command: command.trim(), args: ['--expose-internals', join(resources, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js')] };
       environment.ELECTRON_RUN_AS_NODE = '1';
     }
-    const { stdout } = await run(native.command, [...native.args, '--version'], {
-      env: environment, timeout: 10000, windowsHide: true, maxBuffer: 65536
-    });
-    const version = stdout.trim();
-    if (!version) throw new Error('empty version');
+    const version = await readCliVersion(engine, native, environment);
     let detail = '已读取版本；请先在电脑完成官方登录，手机首次任务仍需验证。';
-    if (engine === 'codex') detail = version === 'codex-cli 0.169.0'
-      ? '目标版本匹配；共享 app-server 需显式启动/登记，版本输出不代表已接管原生会话。'
-      : '目标为 codex-cli 0.169.0；当前版本不匹配，不能启动共享控制运行时。';
+    if (engine === 'codex') detail = await supportsCodexListen(native, environment).catch(() => false)
+      ? '已检测到 app-server --listen。保存后可启动或登记共享运行时，助手将验证实际连接。'
+      : '该程序的帮助未列出 app-server --listen。启动共享运行时可检查实际握手结果。';
     if (engine === 'opencode') detail = isDevEco(command)
       ? '已找到 DevEco Code。启动运行时后，可在手机 OpenCode 分区查看本机项目的会话并继续点单。'
-      : '目标为 client/CLI 2.3.0；普通探测只做 discover，不会 ensure 或替换现有服务。';
+      : '已找到程序。登记时将发现本机服务，连接后检查会话接口与事件流。';
     if (engine === 'deepseek-harness') detail = 'CLI 版本不代表控制能力；以同宿主 bridge/controller 握手及实际能力为准。';
     return { engine, command: command.trim(), installed: true, version, detail };
   } catch {
@@ -112,6 +109,8 @@ export async function saveHost(root: string, input: SetupInput) {
   const enabled = await Promise.all(engines.filter(id => input.runtimes[id]?.enabled).map(async id => {
     const result = await probeRuntime(id, input.runtimes[id]!.command);
     if (!result.installed) throw new Error(`${id}：${result.detail}`);
+    const prior = previous?.runtimes[id];
+    if (prior?.compatibilityMode === 'pinned') checkRuntimePolicy({ ...prior, enabled: true }, result.version);
     return result;
   }));
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -134,7 +133,9 @@ export async function saveHost(root: string, input: SetupInput) {
   try { await access(bridgeTokenFile); } catch { await writeFile(bridgeTokenFile, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' }); }
   const runtimes = Object.fromEntries(engines.map(id => {
     const result = enabled.find(r => r.engine === id);
-    return [id, { ...previous?.runtimes[id], command: result?.command || previous?.runtimes[id]?.command || commands[id], expectedVersion: result?.version || previous?.runtimes[id]?.expectedVersion || 'DISABLED', enabled: !!result,
+    const prior = previous?.runtimes[id];
+    return [id, { ...prior, command: result?.command || prior?.command || commands[id], compatibilityMode: prior?.compatibilityMode ?? 'latest-compatible',
+      expectedVersion: prior?.compatibilityMode === 'pinned' ? prior.expectedVersion : result?.version || prior?.expectedVersion || 'DISABLED', enabled: !!result,
       models: previous?.runtimes[id]?.models || [], ...(id === 'codex' ? { endpoint: codexEndpoint } : {}), ...(id === 'deepseek-harness' ? { bridgeTokenFile } : {}) }];
   })) as Record<EngineId, ManagedRuntimeConfig>;
   const config: HostConfig = { ...previous, hostId, name: input.name.trim(), os: platform(), listen: input.address, port: 8899,

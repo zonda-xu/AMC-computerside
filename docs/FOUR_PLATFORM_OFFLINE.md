@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-依据根目录 `AI_Maid_Cafe_Four_Platform_Offline_Development_Plan_2026-11-16.md` 第 2、4、11、12 节及附录 A–F。当前源码已包含生产控制实现和合成服务集成测试，但缺失的目标依赖与真实环境仍阻塞原生验收，不能据此认定四个平台已完整可用。旧的 [主机说明](HOST_SETUP.md) 中 Codex alpha 与外部历史只读配置是旧基线，不可与本计划 0.169.0 的控制协议混用。最新检查结果见 [实现记录](FOUR_PLATFORM_IMPLEMENTATION_REPORT_2026-11-16.md)。
+离线打包的依赖清单来自四平台开发计划。主机运行时按实际协议能力接入，配置步骤见 [主机说明](HOST_SETUP.md)。
 
 四平台 JSON 是按已摘录的真实原生接口形态构造的**合成、最小相关字段样例**，不是从真实程序录制的完整报文，也不是上游完整 schema。`nativeVerified:false` 必须保留。Claude 的 Query、AbortSignal、DSH 的 agent/resolver 是进程内对象；JSON 只表示可序列化参数和结果，不能恢复这些句柄。
 
@@ -15,7 +15,7 @@
 | Node | `>=24.13.0 <25` | `C:\Program Files\nodejs\node.exe` 实测 `v24.18.0` |
 | TypeScript | 5.9.3 | package.json 固定值；部署记录仍须记录实际安装值 |
 | AJV | 8.17.1 | 使用仓库已有依赖，无新依赖 |
-| Codex | `rust-v0.169.0` / `d32063f96c2dff1dc96af839b3952abb6acfeda4` | 仅合成契约；真实二进制、共享服务未验证 |
+| Codex | `rust-v0.169.0` / `d32063f96c2dff1dc96af839b3952abb6acfeda4` | 本机 0.167.1 与 0.145.0 已通过共享连接、历史、同会话续聊和另开会话测试，使用本机测试模型服务 |
 | Claude Agent SDK | `@anthropic-ai/claude-agent-sdk@0.3.325` | 仅合成契约；未调用 SDK |
 | Claude Code | 2.1.325 / `a360e7297ecfcddeae9ec99fb3c93153ed86aca4` | 计划组合，未实测 |
 | OpenCode client / CLI | 均为 2.3.0 / `d5ea1ee6761eaba9787b09211b23d6d76288aded` | 仅 v2 HTTP/SSE 合成契约 |
@@ -82,7 +82,7 @@
 | --- | --- |
 | Codex | 用固定二进制 `app-server --help` 核对后运行 `codex app-server --listen ws://127.0.0.1:8897`；核对占用和进程身份。桌面用 `codex --remote ws://127.0.0.1:8897` 连接同一个服务。初始化后发 initialized；另起进程读相同历史不是接管。 |
 | Claude | 通过长期持有的官方 SDK Query 接受 AsyncIterable 输入，明确 `pathToClaudeCodeExecutable`、授权 cwd、`includePartialMessages:true`、`permissionMode:default`。持续消费输出。手机断线不关闭输入；Query 真结束才用 resume 同 session，不 fork。 |
-| OpenCode | 固定 client/CLI 2.3.0，用 `Service.discover()` 与 `Service.headers(endpoint)` 连接同一已登记服务。普通读取不得调用 ensure 替换服务；确认无服务且操作员明确启动时才使用 `opencode serve --service`。手机不访问原生端点。 |
+| OpenCode | 用 `Service.discover()` 与 `Service.headers(endpoint)` 连接同一已登记服务。普通读取不得调用 ensure 替换服务；确认无服务且操作员明确启动时才使用 `opencode serve --service`。手机不访问原生端点。 |
 | DSH | 完整 `plugins/dsh-bridge/` 加载进实际宿主；插件取得该宿主 controller。桥主动连 `ws://127.0.0.1:8898`，`tokenFile` 指向既有私有 dsh-bridge.secret。controller 必须来自匹配依赖上下文；不能用版本字符串代替真实握手或用历史记录伪造 resolver。 |
 
 ## 升级与迁移

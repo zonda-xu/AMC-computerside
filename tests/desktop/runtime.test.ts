@@ -6,9 +6,24 @@ import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { WebSocketServer } from 'ws';
 import { codexEndpoint, codexHandshake, RuntimeManager, type ManagedRuntimeConfig, type ServiceEndpoint } from '../../apps/desktop/src/runtime.ts';
+import { codexControls } from '../../packages/adapters/codex/protocol.ts';
 
 const codex: ManagedRuntimeConfig = { command: 'codex', expectedVersion: 'codex-cli 0.169.0', enabled: true };
 const opencode: ManagedRuntimeConfig = { command: 'opencode', expectedVersion: '2.3.0', enabled: true };
+test('Codex offers only the operations present in a partial native method contract', () => {
+  const methods={requests:new Set(['thread/start','thread/read','thread/resume']),callbacks:new Set(['item/tool/requestUserInput']),notifications:new Set(['item/completed','turn/completed'])};
+  const control=codexControls(methods);
+  assert.equal(control.create,true);assert.equal(control.attach,true);assert.equal(control.answer,true);
+  assert.equal(control.submit,false);assert.equal(control.approve,false);assert.equal(control.cancel,false);assert.equal(control.configure,false);
+  assert.equal(codexControls(methods,new Set(['thread/resume'])).attach,false);
+});
+test('a reachable socket with an invalid Codex initialize result cannot register a native connection', async () => {
+  const server=new WebSocketServer({port:0,host:'127.0.0.1'});await new Promise<void>(ok=>server.once('listening',ok));
+  const address=server.address();assert.ok(address&&typeof address==='object');
+  server.on('connection',socket=>socket.on('message',data=>socket.send(JSON.stringify({id:JSON.parse(data.toString()).id,result:{}}))));
+  try { await assert.rejects(codexHandshake('ws://127.0.0.1:'+address.port),/userAgent/); }
+  finally { for(const socket of server.clients)socket.terminate();await new Promise<void>(ok=>server.close(()=>ok())); }
+});
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'amc-runtime-'));
   return { root, close: () => rm(root, { recursive: true, force: true }) };
@@ -28,6 +43,20 @@ test('Codex read probes never launch, explicit start registers one shared runtim
     const restartedManager = new RuntimeManager(f.root, manager.hooks);
     assert.deepEqual(await restartedManager.start('codex', codex), first); assert.equal(launches, 1);
   } finally { await f.close(); }
+});
+test('an installed CLI upgrade keeps the registered Codex session and enforces the running version only for explicit pins', async () => {
+  const f=await fixture();let installed='codex-cli 0.145.0';let starts=0;
+  const manager=new RuntimeManager(f.root,{version:async()=>installed,launchCodex:async()=>{starts++;return process.pid;},codexHandshake:async()=>{}});
+  try {
+    const original=await manager.start('codex',codex);
+    installed='codex-cli 0.167.1';
+    assert.equal((await manager.connect('codex',codex)).version,'codex-cli 0.145.0');
+    assert.deepEqual(await manager.start('codex',codex),original);
+    await assert.rejects(manager.start('codex',{...codex,compatibilityMode:'pinned',expectedVersion:installed}),/已固定版本/);
+    assert.equal((await manager.connect('codex',{...codex,compatibilityMode:'pinned',expectedVersion:'0.145.0'})).identity,original.identity);
+    await assert.rejects(manager.connect('codex',{...codex,env:{CODEX_HOME:'another-profile'}}),/会话目录/);
+    assert.equal(starts,1);
+  } finally {await f.close();}
 });
 test('Codex failed connection retains the registered process and never replaces it', async () => {
   const f = await fixture(); let failed = false, launches = 0;
@@ -120,7 +149,7 @@ test('runtime disabled, version mismatch, corrupt registration and non-loopback 
     await assert.rejects(manager.start('codex', { ...codex, enabled: false }), /disabled/);
     await assert.rejects(manager.connect('codex', { ...codex, enabled: false }), /disabled/);
     assert.equal((await manager.probe('codex', { ...codex, command: process.execPath })).state, 'unavailable');
-    await assert.rejects(manager.start('codex', { ...codex, command: process.execPath }), /pinned target/);
+    await assert.rejects(manager.start('codex', { ...codex, compatibilityMode:'pinned', command: process.execPath }), /已固定版本/);
     await writeFile(join(f.root, 'codex.runtime.json'), '{}');
     await assert.rejects(manager.registration('codex'), /Invalid/);
     const remote = new RuntimeManager(f.root, { version: async () => '2.3.0', service: async () => ({ discover: async () => ({ url: 'http://example.com:5555' }), ensure: async () => { throw new Error('must not ensure'); }, headers: () => ({}) }) });

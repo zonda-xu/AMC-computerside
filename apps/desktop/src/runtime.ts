@@ -1,22 +1,24 @@
-import { spawn, execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { devEcoEndpoint, isDevEco } from '../../../packages/adapters/opencode/deveco-service.ts';
-import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { createServer } from 'node:net';
-import { WebSocket } from 'ws';
-import { nativeCommand } from '../../../packages/adapters/common/command.ts';
+import { nativeCommand, readCliVersion } from '../../../packages/adapters/common/command.ts';
 import { nativeEnvironment } from '../../../packages/adapters/common/rpc.ts';
-import type { RuntimeConfig } from '../../../packages/adapters/common/base.ts';
+import { checkRuntimePolicy, type RuntimeConfig } from '../../../packages/adapters/common/base.ts';
+import { loadNativeModule } from '../../../packages/adapters/common/native-module.ts';
+import { WebSocketRpc } from '../../../packages/adapters/common/ws-rpc.ts';
+import { initializeCodex } from '../../../packages/adapters/codex/protocol.ts';
 
 export const codexEndpoint = 'ws://127.0.0.1:8897';
+// Reference releases for consumers of the desktop API. Connection decisions use the native protocol.
 export const runtimeVersions = { codex: 'codex-cli 0.169.0', opencode: '2.3.0', claudeSDK: '0.3.325', claudeCLI: '2.1.325' };
 export type ManagedEngine = 'codex' | 'opencode';
 export interface ManagedRuntimeConfig extends RuntimeConfig { serviceRegistrationFile?: string }
 export interface RuntimeRegistration {
   engine: ManagedEngine; runtimeInstanceId: string; generation: number; endpoint: string;
-  version: string; pid?: number; identity: string;
+  version: string; pid?: number; identity: string; launchScope?: string;
 }
 export interface RuntimeStatus {
   engine: ManagedEngine; state: 'connected' | 'unavailable' | 'disabled';
@@ -31,7 +33,7 @@ export interface OpenCodeService {
 export interface RuntimeHooks {
   service?: () => Promise<OpenCodeService>;
   version?: (engine: ManagedEngine, config: ManagedRuntimeConfig) => Promise<string>;
-  codexHandshake?: (endpoint: string) => Promise<void>;
+  codexHandshake?: (endpoint: string, expectedHome?: string) => Promise<void>;
   launchCodex?: (config: ManagedRuntimeConfig) => Promise<number>;
 }
 function localEndpoint(value: string, protocol: 'http:' | 'ws:') {
@@ -40,30 +42,19 @@ function localEndpoint(value: string, protocol: 'http:' | 'ws:') {
   return value;
 }
 async function version(engine: ManagedEngine, config: ManagedRuntimeConfig) {
-  const native = nativeCommand(config.command);
-  const result = await promisify(execFile)(native.command, [...native.args, '--version'], { env: nativeEnvironment(engine, config.env), timeout: 10000, windowsHide: true, maxBuffer: 65536 });
-  const actual = result.stdout.trim();
-  if(engine==='opencode'&&isDevEco(config.command)&&/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(actual))return actual;
-  if (actual !== config.expectedVersion || (engine === 'codex' ? actual !== runtimeVersions.codex : !/^(?:opencode\s+)?2\.3\.0$/.test(actual))) throw new Error(`${engine}: native version does not match the pinned target`);
-  return actual;
+  try { return await readCliVersion(engine, nativeCommand(config.command), nativeEnvironment(engine, config.env)); }
+  catch (error) {
+    if (engine === 'opencode' && config.compatibilityMode !== 'pinned') return 'unknown';
+    throw error;
+  }
 }
-export function codexHandshake(endpoint: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(localEndpoint(endpoint, 'ws:'), { maxPayload: 1024 * 1024 });
-    const finish = (error?: Error) => { clearTimeout(timer); socket.removeAllListeners(); socket.on('error', () => {}); socket.terminate(); error ? reject(error) : resolve(); };
-    const timer = setTimeout(() => finish(new Error('Codex initialize timed out; existing runtime was not replaced')), 3000);
-    socket.once('error', finish);
-    socket.once('close', () => finish(new Error('Codex disconnected during initialize')));
-    socket.once('open', () => socket.send(JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ai-maid-cafe-desktop', version: '1.0.0' }, capabilities: { experimentalApi: true } } })));
-    socket.on('message', data => {
-      try {
-        const message = JSON.parse(data.toString());
-        if (message.id !== 1) return;
-        if (message.error || !message.result || typeof message.result !== 'object') throw new Error('Codex initialize rejected');
-        socket.send(JSON.stringify({ method: 'initialized' }), error => finish(error || undefined));
-      } catch (error) { finish(error as Error); }
-    });
-  });
+export async function codexHandshake(endpoint: string, expectedHome?: string): Promise<void> {
+  const rpc = new WebSocketRpc(localEndpoint(endpoint, 'ws:'));
+  try { await initializeCodex(rpc, expectedHome); } finally { rpc.close(); }
+}
+function codexLaunchScope(config: ManagedRuntimeConfig) {
+  const env = nativeEnvironment('codex', config.env);
+  return createHash('sha256').update(JSON.stringify([config.command.trim(), env.CODEX_HOME || '', env.USERPROFILE || env.HOME || ''])).digest('hex');
 }
 function alive(pid: number) {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid registered runtime PID');
@@ -83,12 +74,12 @@ export class RuntimeManager {
   readonly root: string;
   readonly hooks: RuntimeHooks;
   constructor(root: string, hooks: RuntimeHooks = {}) { this.root = root; this.hooks = hooks; }
-  private async service() {
+  private async service(config: ManagedRuntimeConfig) {
     if (this.hooks.service) return this.hooks.service();
-    const manifest = JSON.parse(await readFile(new URL('../../../node_modules/@opencode/client/package.json', import.meta.url), 'utf8'));
-    if (manifest.version !== runtimeVersions.opencode) throw new Error('OpenCode client 2.3.0 is not installed locally');
-    const moduleName = '@opencode/client/service';
-    return (await import(moduleName)).Service as OpenCodeService;
+    const module = await loadNativeModule(config.serviceModule || '@opencode/client/service', '@opencode/client');
+    const service = module.Service as OpenCodeService;
+    if (typeof service?.discover !== 'function' || typeof service.headers !== 'function') throw new Error('OpenCode client 缺少 Service.discover 或 Service.headers');
+    return service;
   }
   async registration(engine: ManagedEngine): Promise<RuntimeRegistration | undefined> {
     try {
@@ -101,18 +92,21 @@ export class RuntimeManager {
   }
   private async connection(engine: ManagedEngine, config: ManagedRuntimeConfig) {
     if (config.enabled === false) throw new Error('Runtime disabled');
-    const actualVersion = await (this.hooks.version || version)(engine, config);
     const previous = await this.registration(engine);
     if (engine === 'codex') {
-      if (!previous || previous.version !== actualVersion || !alive(previous.pid!)) throw new Error('Registered shared Codex runtime is unavailable; use explicit host startup');
-      await (this.hooks.codexHandshake || codexHandshake)(previous.endpoint);
-      return { version: actualVersion, endpoint: previous.endpoint, identity: previous.identity, pid: previous.pid, headers: {} as Record<string, string> };
+      if (!previous || !alive(previous.pid!)) throw new Error('Registered shared Codex runtime is unavailable; use explicit host startup');
+      checkRuntimePolicy(config, previous.version);
+      if (previous.launchScope && previous.launchScope !== codexLaunchScope(config)) throw new Error('Codex 已登记进程的启动程序或会话目录与所选配置不同');
+      await (this.hooks.codexHandshake || codexHandshake)(previous.endpoint, nativeEnvironment(engine, config.env).CODEX_HOME);
+      return { version: previous.version, endpoint: previous.endpoint, identity: previous.identity, pid: previous.pid, headers: {} as Record<string, string> };
     }
+    const actualVersion = await (this.hooks.version || version)(engine, config);
+    checkRuntimePolicy(config, actualVersion);
     if(engine==='opencode'&&isDevEco(config.command)){
       const peer=await devEcoEndpoint(this.root,config);
       return {version:actualVersion,endpoint:peer.url,identity:peer.identity,pid:peer.pid,headers:peer.headers};
     }
-    const service = await this.service();
+    const service = await this.service(config);
     const endpoint = await service.discover();
     if (!endpoint) throw new Error('OpenCode discovery returned no compatible service; registration/PID must be inspected before explicit startup');
     localEndpoint(endpoint.url, 'http:');
@@ -133,26 +127,32 @@ export class RuntimeManager {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const lockPath = join(this.root, `${engine}.runtime.lock`), lock = await open(lockPath, 'wx', 0o600);
     try {
-      const actual = await (this.hooks.version || version)(engine, config);
       const previous = await this.registration(engine);
-      if (engine === 'codex' && (!previous || !alive(previous.pid!))) {
+      if (engine === 'codex' && previous && alive(previous.pid!)) {
+        await this.connection(engine, config);
+        return previous;
+      }
+      const actual = await (this.hooks.version || version)(engine, config);
+      checkRuntimePolicy(config, actual);
+      if (engine === 'codex') {
         const pid = await (this.hooks.launchCodex || launchCodex)(config);
-        await this.persist({ engine, runtimeInstanceId: randomUUID(), generation: (previous?.generation || 0) + 1, endpoint: codexEndpoint, version: actual, pid, identity: randomUUID() });
+        await this.persist({ engine, runtimeInstanceId: randomUUID(), generation: (previous?.generation || 0) + 1, endpoint: codexEndpoint, version: actual, pid, identity: randomUUID(), launchScope:codexLaunchScope(config) });
         let error: unknown;
         for (let attempt = 0; attempt < 20; attempt++) {
           try { await (this.hooks.codexHandshake || codexHandshake)(codexEndpoint); error = undefined; break; } catch (failure) { error = failure; await new Promise(resolve => setTimeout(resolve, 100)); }
         }
-        if (error) throw new Error(`Started Codex PID ${pid} but handshake failed; process retained for inspection`);
+        if (error) throw new Error(`Codex PID ${pid} 共享接口握手失败（${(error as Error).message}）。请检查 app-server --listen 是否可用。`);
       }
       if(engine==='opencode'&&isDevEco(config.command))await devEcoEndpoint(this.root,config,true);
       else if (engine === 'opencode') {
-        const service = await this.service();
+        const service = await this.service(config);
         if (!await service.discover()) {
           if (previous) throw new Error('Previously registered OpenCode runtime is unavailable; inspect its PID/version, no replacement permitted');
           if (!config.serviceRegistrationFile || !isAbsolute(config.serviceRegistrationFile)) throw new Error('OpenCode registration location is required before ensure; absence of discovery is not proof of absence');
           try { await readFile(config.serviceRegistrationFile); throw new Error('OpenCode registration exists but discovery failed; inspect its PID/version, no replacement permitted'); }
           catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-          if (config.command !== 'opencode') throw new Error('Custom OpenCode startup command has not been verified against client 2.3.0');
+          if (config.command !== 'opencode') throw new Error('Service.ensure starts the default opencode executable; start the configured custom service before registration');
+          if (typeof service.ensure !== 'function') throw new Error('OpenCode client 缺少 Service.ensure，请先启动官方服务再登记');
           await service.ensure();
         }
       }
@@ -168,8 +168,8 @@ export class RuntimeManager {
   }
   async connect(engine: ManagedEngine, config: ManagedRuntimeConfig) {
     const connection = await this.connection(engine, config), record = await this.registration(engine);
-    if (!record || record.identity !== connection.identity || record.version !== connection.version) throw new Error('Runtime identity changed; explicit host registration required');
-    return { ...record, headers: connection.headers };
+    if (!record || record.identity !== connection.identity) throw new Error('Runtime identity changed; explicit host registration required');
+    return { ...record, version: connection.version, headers: connection.headers };
   }
   private async persist(record: RuntimeRegistration) {
     const temporary = join(this.root, `${record.engine}-${randomUUID()}.tmp`);

@@ -81,19 +81,21 @@ test('arbitrary future minor and major versions remain candidates, never automat
   }
 });
 
-test('older, invalid and missing component versions fail closed, even with positive evidence', () => {
+test('older and vendor-labelled components can prove their capabilities, missing component identities cannot', () => {
   const runtimes = [
     descriptor('codex', { cli: '0.168.99' }), descriptor('codex', { cli: '0.169.0-rc.1' }),
     descriptor('codex', { cli: 'invalid' }), descriptor('claude-code', { sdk: '0.3.324' }),
     descriptor('opencode', { client: '2.2.99' }), descriptor('deepseek-harness', { controller: '0.2.1-rc.4' }),
-    { ...descriptor('claude-code'), componentVersions: { cli: '2.1.325' } },
   ];
   for (const runtime of runtimes) {
     const result = assessCompatibility(runtime, { now }, undefined, evidenceFor(runtime));
-    assert.equal(result.permittedToProbe, false);
-    assert.equal(result.evidence.capabilities.create, false);
-    assert.equal(validateProtocolEvidence(runtime, evidenceFor(runtime), { now }).valid, false);
+    assert.equal(result.permittedToProbe, true);
+    assert.equal(result.evidence.capabilities.create, true);
+    assert.equal(assessCompatibility(runtime,{now}).evidence.capabilities.create, false);
   }
+  const missing = { ...descriptor('claude-code'), componentVersions: { cli: '2.1.325' } };
+  assert.equal(assessCompatibility(missing,{now}).permittedToProbe,false);
+  assert.equal(validateProtocolEvidence(missing,evidenceFor(missing),{now}).valid,false);
   for (const version of ['0.2.1-rc.6', '0.2.1', '0.2.2-alpha.1']) {
     assert.equal(assessCompatibility(descriptor('deepseek-harness', { controller: version }), { now }).candidate, true);
   }
@@ -112,7 +114,7 @@ test('pinned policy requires every exact target and configuration, without bypas
   assert.equal(assessCompatibility(future, { now }, policy).permittedToProbe, false);
   assert.equal(assessCompatibility(future, { now }, { mode: 'pinned', targets: { cli: '9.0.0+build.1' }, configurationId: future.configurationId }).permittedToProbe, true);
   assert.equal(assessCompatibility(future, { now }, { mode: 'pinned', targets: { cli: '9.0.0+build.2' }, configurationId: future.configurationId }).permittedToProbe, false);
-  assert.equal(assessCompatibility(descriptor('codex', { cli: '0.168.0' }), { now }, { mode: 'pinned', targets: { cli: '0.168.0' }, configurationId: runtime.configurationId }).permittedToProbe, false);
+  assert.equal(assessCompatibility(descriptor('codex', { cli: '0.168.0' }), { now }, { mode: 'pinned', targets: { cli: '0.168.0' }, configurationId: runtime.configurationId }).permittedToProbe, true);
 });
 
 test('passive handshake and passive claims never prove callbacks, terminal outcomes or cancellation', () => {
@@ -177,6 +179,6 @@ test('optional latest metadata comparison is advisory and pure', () => {
   assert.equal(compareLatestMetadata('0.169.0', '99.0.0', '0.169.0').candidate, true);
   assert.equal(compareLatestMetadata('99.0.0', '0.169.0', '0.169.0').relation, 'older');
   assert.equal(compareLatestMetadata('0.169.0', '0.169.0+build', '0.169.0').relation, 'equal');
-  assert.equal(compareLatestMetadata('0.1.0', '0.168.0', '0.169.0').candidate, false);
+  assert.equal(compareLatestMetadata('0.1.0', '0.168.0', '0.169.0').candidate, true);
   assert.equal(compareLatestMetadata('bad', '99.0.0', '0.169.0').relation, 'invalid');
 });

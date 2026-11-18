@@ -94,7 +94,7 @@ function updateDsh() {
 }
 async function probe(id) {
   const row = $(`[data-engine="${id}"]`), output = row.querySelector('.runtime-status');
-  output.textContent = '正在读取 --version 输出…';
+  output.textContent = '正在检测本机程序与原生连接能力…';
   const result = await api('probe', { engine: id, command: $(`#command-${id}`).value.trim() }); probeResults.set(id, result);
   output.textContent = result.installed ? `${result.version} · ${result.detail}${result.runtime ? ' · ' + result.runtime.state + ' · ' + result.runtime.detail : ''}` : result.detail;
   output.className = 'runtime-status ' + (result.installed ? 'pass' : 'fail'); updateDsh();

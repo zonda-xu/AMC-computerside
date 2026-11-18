@@ -21,10 +21,10 @@ test('native dependency gates verify package identity and exact version before e
   const directory=await mkdtemp(join(tmpdir(),'four-platform-adapters-module-'));
   try{
     const entry=join(directory,'service.mjs');
-    await writeFile(entry,'throw new Error("must not execute mismatched dependency");');
+    await writeFile(entry,'export const Service={discover:async()=>undefined,headers:()=>({})};');
     await writeFile(join(directory,'package.json'),JSON.stringify({name:'@opencode/client',version:'2.2.0',type:'module'}));
     await assert.rejects(loadNativeModule(pathToFileURL(entry).href,'@opencode/client','2.3.0'),/2.3.0 required; found 2.2.0/);
-    const wrongClientContext=nativeContext('opencode');const wrongClient=new OpenCodeAdapter('opencode',{command:'unused',expectedVersion:'2.3.0',serviceModule:pathToFileURL(entry).href},wrongClientContext.context);await assert.rejects(wrongClient.discover(),/OpenCode v2 discovery unavailable.*2.3.0 required; found 2.2.0/);
+    const olderClientContext=nativeContext('opencode');const olderClient=new OpenCodeAdapter('opencode',{command:'unused',expectedVersion:'2.3.0',serviceModule:pathToFileURL(entry).href},olderClientContext.context);await assert.rejects(olderClient.discover(),/Service.ensure will not be called/);
     await assert.rejects(loadNativeModule(pathToFileURL(entry).href,'@anthropic-ai/claude-agent-sdk','0.3.325'),/not provided by/);
     await writeFile(join(directory,'package.json'),JSON.stringify({name:'@opencode/client',version:'2.3.0',type:'module'}));
     await writeFile(entry,'export const Service={discover:async()=>undefined,headers:()=>({})};');
@@ -125,7 +125,7 @@ test('DSH truncated opening snapshot pages the pinned cut before claiming active
 
 test('Codex automatically reconnects to the same server and restores terminal state without resubmitting',async t=>{
   const f=nativeContext();const server=new WebSocketServer({host:'127.0.0.1',port:0});await once(server,'listening');const address=server.address();if(!address||typeof address==='string')throw new Error('No listener');let connections=0;const calls:string[]=[];
-  server.on('connection',socket=>{connections++;socket.on('message',raw=>{const m=JSON.parse(raw.toString());calls.push(m.method);if(m.id===undefined)return;const result=m.method==='thread/start'?{thread:{id:'native'}}:m.method==='thread/resume'?{thread:{id:'native',status:{type:'idle'},turns:[{id:'turn',status:'completed',items:[]}]}}:{};socket.send(JSON.stringify({id:m.id,result}));});});
+  server.on('connection',socket=>{connections++;socket.on('message',raw=>{const m=JSON.parse(raw.toString());calls.push(m.method);if(m.id===undefined)return;const result=m.method==='initialize'?{userAgent:'codex-fixture'}:m.method==='thread/start'?{thread:{id:'native'}}:m.method==='thread/resume'?{thread:{id:'native',status:{type:'idle'},turns:[{id:'turn',status:'completed',items:[]}]}}:{};socket.send(JSON.stringify({id:m.id,result}));});});
   const a=new CodexAdapter('codex',{command:'unused',expectedVersion:'',endpoint:`ws://127.0.0.1:${address.port}`,runtimeIdentity:'incarnation'},f.context);t.mock.method(a,'checkVersion',async()=>{});
   try{await a.createSession(f.session.id,f.workspace);f.session.state='running';a.rpc!.socket.terminate();await until(()=>connections===2&&f.session.state==='completed');assert.equal(calls.includes('turn/start'),false);assert.equal(f.session.binding?.nativeIdentity,'incarnation');}
   finally{a.close();for(const socket of server.clients)socket.terminate();await new Promise<void>(resolve=>server.close(()=>resolve()));}

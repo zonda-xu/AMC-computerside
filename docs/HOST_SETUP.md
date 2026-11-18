@@ -24,19 +24,19 @@ npm run gateway -- host.config.json
 
 Linux 将地址改为 `.4`、公网端口改为 `18542`，授权目录例如 `/home/me/projects`。同一 OS 用户只允许一个网关进程，锁文件位于用户私有配置目录。目录锁协调的是控制台管理的任务，不构成原生代理的文件系统沙箱。
 
-`runtimes` 示例（版本必须自行实测后替换）：
+`runtimes` 可以使用默认能力检测策略。
 
 ```json
 {
   "codex": {
     "command": "/absolute/path/to/codex",
-    "expectedVersion": "codex-cli 0.167.0-alpha.4",
+    "compatibilityMode": "latest-compatible",
     "models": []
   }
 }
 ```
 
-Codex 该版本来自本次源码环境的协议生成器，**没有因此被标为在你的三台主机上通过验收**。Claude Code / OpenCode 的版本由部署者固定，未知版本不会自动切换到其他协议或终端解析。
+旧配置中的版本记录可继续使用。只有管理员显式选择 `pinned` 时，网关才检查 `expectedVersion`。
 
 ## DSH 薄桥接
 
@@ -76,14 +76,14 @@ Configure authorized workspace roots on the host, not from the phone. To create 
 
 | Tool | External Source Deployment |
 |---|---|
-| Codex | Exact `codex-cli 0.167.0-alpha.4.1` or previously verified `codex-cli 0.167.1`, matching expectedVersion. The alpha.4.1 npm provenance resolves to `d2c035639366e0bf2c316aa2065c24aabc12bcdc`; its own list/read/turns JSON schemas are bundled under tests/contracts/codex-generated/alpha4.1. Uses thread/list with useStateDbOnly, thread/read metadata and paginated full thread/turns/list, never resume/start for import. CODEX_HOME/command participate in source identity. The old alpha.4 approval schemas are not evidence of history compatibility. |
-| Claude Code | External discovery/history is unverified and disabled. Supply the deployed version and a selected sanitized native record/contract before adding a parser. The gateway's own reservation file is not an external catalog. |
-| OpenCode | External discovery/history is unverified and disabled. Supply the deployed version and its native list/history API or ACP discovery proof. ACP load alone is not enumeration or process control. |
-| DSH | Same loaded plugin host only, official `@deepseek-ai/dsh-api-session-controller@0.2.1-rc.5`. Install index.mjs, mapping.mjs, external.mjs and profile.mjs together. Bridge v2 verifies the resolved controller entry SHA256 and that ctx.get('sessionController') is an instance of the class exported by that exact module. Configuration hostVersion/hostRevision no longer enables anything. CLI rc.5 alone is not API evidence. Managed creation/send/approval/control are disabled in both adapter and plugin. |
+| Codex | 已登记的 app-server 提供 `thread/list` 和 `thread/read`。网关校验线程 ID、授权目录，并按线程报告的历史模式读取完整轮次。 |
+| Claude Code | 授权项目历史由官方 SDK 的 `listSessions` 和 `getSessionMessages` 提供。 |
+| OpenCode | 从已登记服务读取项目会话和消息。DevEco Code 使用自身的原生会话接口。 |
+| DSH | 桥接插件验证同宿主 controller、服务协议及各操作的能力，按原生会话 ID 读取历史。 |
 
 DSH rc.5 has page/projections/follow, not the old plugin's guessed events/state methods. The history path only calls list, projections and page. It requires a sequenced projection waterline and bounds every backward page by asOfSeq; null, migration-required or unavailable projections fail explicitly. It never calls follow, which can promote a prepared source into an Agent, and registers no approval/question handlers. Discovery remains a bounded snapshot with single-use 60-second cursors. Large histories fail instead of truncating. Refresh is manual durable-journal synchronization, not live terminal attachment. Plugin restart changes source generation and requires rediscovery/import before new reads.
 
-External sending, approvals, answers, cancellation, configuration and continuation remain disabled for all four tools. No control lease is issued; rejecting lease endpoints is not a completed control implementation. Do not bypass this gate with quiet logs, a checked box or successful resume. Codex retains the separate gateway-managed new-session entry, which is not continuation or proof that an independent CLI has stopped writing. DSH's older managed path is disabled, including new creation, because its state API and approval competition were not verified for rc.5. Existing records are not removed or marked stopped by the upgrade.
+导入历史后，控制操作还需验证同一已登记实例、原会话与授权项目。无法确认归属时保留只读历史。
 
 ### Mac Runtime Confirmation
 

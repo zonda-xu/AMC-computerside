@@ -33,7 +33,7 @@ npm run pair -- --config /absolute/private/host.config.json --out pairing-device
 | OpenCode | v2 HTTP/SSE、模型目录和原生会话控制 |
 | DeepSeek Harness | 在同一宿主加载 Cordis 插件，通过 sessionController 管理原生会话 |
 
-DSH 默认根据实际能力协商接入，保留显式固定版本模式。模型、附件、审批、问答、slash/steer 等能力以宿主实际支持为准。详情见 [DSH 接入说明](docs/DSH_INTEGRATION_2026-11-17.md)。
+四个平台默认按原生接口接入。Codex 握手成功后单独检测会话列表、模型目录和控制接口。旧配置中的 `expectedVersion` 只在显式选择 `compatibilityMode: "pinned"` 时锁定版本。模型、附件、审批、问答、slash/steer 等能力以宿主实际支持为准。详情见 [DSH 接入说明](docs/DSH_INTEGRATION_2026-11-17.md)。
 
 网关和手机共同使用协议 v2。会话身份、运行代次、幂等命令、水位恢复、工作区授权及 SQLite 持久化继续有效；切换手机页面或平台不会自动取消其他任务。EasyTier 仅提供网络互通，配对与访问仍使用受信任的 TLS。
 

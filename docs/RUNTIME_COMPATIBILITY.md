@@ -1,30 +1,30 @@
 # Runtime Compatibility Policy
 
-The user's automatic tracking choice is represented by `latest-compatible`, the default policy in `packages/protocol/src/compatibility.ts`. Automatic tracking means evaluating locally available newer runtimes against required protocol evidence. It does **not** mean blindly upgrading processes, trusting a release number, or promising compatibility with future versions.
+The default policy, `latest-compatible`, checks the registered native protocol. The connection assistant records the installed version for diagnostics.
 
-This module is a reusable, pure policy layer. It performs no network requests, package installation, native execution, process replacement, authentication, or cloud-provider calls. Its tests use synthetic evidence, not native verification. No existing adapter or gateway is changed by these three new files; the native/main agent must integrate the policy before behavior changes.
+This pure policy module evaluates scoped evidence and explicit pins. Native probes live in the adapters.
 
 ## Profiles
 
-| Engine | Required component baselines | Profile ID |
+| Engine | Reference releases | Profile ID |
 | --- | --- | --- |
 | Codex | CLI `0.169.0` | `codex-app-server-0.169.0` |
 | Claude Code | SDK `0.3.325`, CLI `2.1.325` | `claude-sdk-0.3.325-cli-2.1.325` |
 | OpenCode | Client `2.3.0`, CLI `2.3.0` | `opencode-client-cli-2.3.0` |
 | DeepSeek Harness | Controller `0.2.1-rc.5` | `dsh-controller-0.2.1-rc.5` |
 
-These are protocol profile baselines from the plan, not claims that those releases have been verified on this machine. Every required component must be reported independently. A CLI version is not evidence of its SDK/client version. The descriptor's `version` denotes CLI for Codex, Claude and OpenCode, and controller for DSH. If an explicit primary component version disagrees with it, assessment fails closed.
+Persisted history and evidence carry these stable contract identifiers across CLI upgrades. The descriptor records the CLI version for Codex, Claude and OpenCode, and the controller version for DSH. Each component has its own observed identity.
 
 ## Version Policy
 
-- `latest-compatible`: every required installed component must be at least its profile baseline. Equal versions only set `permittedToProbe`. Newer versions, including arbitrary major changes and higher-version prereleases, are candidates requiring protocol evidence, not automatically supported versions.
-- `pinned`: all of the above checks still apply, and every component must match an explicitly supplied target. `configurationId` must be nonempty and exactly match the descriptor. Missing targets fail closed. A newer release may be explicitly pinned, but still needs protocol evidence.
+- `latest-compatible` permits probing older, newer, prerelease and vendor-labelled builds. Each adapter checks the native interfaces it uses.
+- `pinned` requires the configured target. Evidence assessment also checks the configuration ID and each component. Saving desktop settings preserves explicit pins.
 - `candidate` is true only for an eligible combination with at least one newer-than-baseline component. It is false for an exact baseline or a blocked combination. Component assessments also expose the individual decisions.
-- Invalid/missing/older versions fail closed even when supplied evidence claims success. Pinned mode cannot override a baseline with an older release.
-- SemVer ordering includes numeric prerelease identifiers (`rc.10` is newer than `rc.5`); a release is newer than its prereleases. DSH `0.2.1-rc.4` is too old; `0.2.1-rc.6` and `0.2.1` are candidates. `0.169.0-rc.1` is below the Codex stable baseline.
+- Scoped evidence requires component identities. An unknown version cannot satisfy a pin.
+- SemVer ordering is used for release comparisons. A prerelease can prove the same protocol operations as a stable release.
 - Build metadata does not affect ordering but does participate in exact pin and evidence identity matching. Native labels are normalized, so `codex-cli 0.169.0` and `0.169.0` identify the same version.
 
-The parser accepts full three-part SemVer, optional `v`, supported native command prefixes, and Claude's ` (Claude Code)` suffix. It rejects arbitrary text containing a version, leading-zero numeric identifiers, malformed prereleases, and core version integers beyond JavaScript's safe integer range. New output formats must be explicitly normalized or added deliberately, not guessed from arbitrary logs.
+Version ordering accepts three-part SemVer, native command prefixes, optional `v` and the Claude Code suffix. Other single-line build labels are compared literally when evaluating scoped evidence.
 
 ## Evidence Contract
 
@@ -88,7 +88,7 @@ Also exported: `DEFAULT_COMPATIBILITY_POLICY`, `REQUIRED_PROTOCOL_GROUPS`, and e
 2. Call `assessCompatibility(descriptor, { now: Date.now() }, selectedPolicy)` without evidence. Only `permittedToProbe` permits moving to a controlled protocol probe. A blocked result must remain non-controllable. Do not use `candidate` as a support flag.
 3. Collect native protocol evidence in safe, explicitly controlled sessions. Passive discovery/handshake is not permission to submit production work. A separate native probe harness may need to exercise otherwise disabled operations to establish proof; do not bypass production safety gates to do so.
 4. Reassess with `assessCompatibility(descriptor, { now: Date.now() }, selectedPolicy, evidence)`. Use `assessment.evidence.operations` for per-operation diagnostics, `missingGroups` for coverage, and intersect `assessment.evidence.capabilities` with live adapter/binding restrictions. Preserve the returned reason, profile, actual, baseline and candidate fields for diagnostics/UI.
-5. Reassess after runtime/configuration changes and before enabling controls. Keep verification badges and model/authentication reporting in the native evidence layer. `validateProtocolEvidence` alone validates evidence against the automatic baseline floor; it does **not** enforce a selected pinned policy. Use `assessCompatibility` for production policy decisions.
+5. Reassess after runtime or configuration changes. Use `assessCompatibility` to apply the selected policy to scoped evidence.
 
 For strict mode, construct a complete explicit policy, for example:
 
@@ -105,7 +105,7 @@ For automatic tracking, omit the policy argument or pass `{ mode: 'latest-compat
 
 ## Latest Metadata
 
-`compareLatestMetadata` optionally compares caller-supplied latest-version metadata against installed and baseline versions. `relation` describes **latest relative to installed**. Its `candidate` requires latest to be newer than installed and at least the baseline. This is advisory version information only, not protocol evidence or an installation instruction. An invalid installed version cannot be used to infer an upgrade path.
+`compareLatestMetadata` reports a newer available release as a candidate. The version comparison informs update notices. Native protocol checks determine whether a runtime can connect.
 
 Metadata may come from local manifests, an offline cache, a user-approved registry, or another separately owned source. No cloud vendor is required by this policy, and no provider account or cloud model response is needed to make its decisions. Runtime-specific authentication remains a separate native concern. An unavailable registry must not invalidate otherwise fresh local evidence. Future release compatibility depends on retained protocol behavior and proven operations, not vendor claims.
 

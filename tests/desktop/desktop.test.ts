@@ -5,6 +5,7 @@ import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request as httpsRequest } from 'node:https';
 import { request as httpRequest } from 'node:http';
+import { createServer as createTcpServer } from 'node:net';
 import { generateKeyPairSync, X509Certificate } from 'node:crypto';
 import { WebSocket } from 'ws';
 import { DesktopService, networkFiles, verifyEndpoint } from '../../apps/desktop/src/service.ts';
@@ -83,6 +84,7 @@ test('standalone host preserves identity, runs real TLS pairing, invalidates ref
   const fixture = await temporary(), root = join(fixture.root, 'private'), workspace = join(fixture.root, 'project'); await mkdir(workspace);
   const oldLockDir = process.env.AMC_STATE_DIR; process.env.AMC_STATE_DIR = join(fixture.root, 'locks');
   const service = new DesktopService(root); const sockets: WebSocket[] = [];
+  const occupiedBridge = createTcpServer();
   try {
     // Node is only a version-output fixture; this test never claims a real AI task succeeded.
     const input: SetupInput = { name: 'Desktop integration fixture', mode: 'lan', address: available[0].address, workspace, runtimes: { codex: { command: process.execPath, enabled: true } } };
@@ -106,6 +108,16 @@ test('standalone host preserves identity, runs real TLS pairing, invalidates ref
     assert.ok(!JSON.stringify(await service.state()).includes('do-not-expose-native-credentials'));
     assert.ok(!JSON.stringify(await service.state()).includes(pushKey.privateKey));
     await assert.rejects(() => saveHost(root, { ...input, address: '8.8.8.8' })); assert.equal((await readConfig(root))?.name, 'Renamed host');
+    await new Promise<void>((ok, fail) => {
+      occupiedBridge.once('error', (error:NodeJS.ErrnoException) => error.code === 'EADDRINUSE' ? ok() : fail(error));
+      occupiedBridge.listen(8898, '127.0.0.1', ok);
+    });
+    const withBridge = structuredClone(second);
+    withBridge.runtimes['deepseek-harness'].enabled = true;
+    withBridge.runtimes['deepseek-harness'].expectedVersion = '';
+    await writeFile(join(root,'host.config.json'),JSON.stringify(withBridge));
+    await assert.rejects(service.start(), /DSH 桥接 127\.0\.0\.1:8898 已被占用/);
+    await writeFile(join(root,'host.config.json'),JSON.stringify(second));
     await service.start(); assert.equal(service.ready, true);
     await assert.rejects(() => service.save(input), /先停止网关/);
     assert.equal((await verifyEndpoint(second)).ok, true);
@@ -124,5 +136,5 @@ test('standalone host preserves identity, runs real TLS pairing, invalidates ref
     await service.revoke(paired.data.deviceId); assert.equal(await closed, 4001);
     assert.equal((await req('/v2/bootstrap', undefined, paired.data.token)).status, 401);
     await service.stop(); assert.equal(service.ready, false); await service.start(); assert.equal(service.ready, true); await service.stop();
-  } finally { for (const socket of sockets) socket.terminate(); await service.stop(); if (oldLockDir === undefined) delete process.env.AMC_STATE_DIR; else process.env.AMC_STATE_DIR = oldLockDir; await fixture.cleanup(); }
+  } finally { for (const socket of sockets) socket.terminate(); await service.stop(); if(occupiedBridge.listening)await new Promise<void>(done=>occupiedBridge.close(()=>done())); if (oldLockDir === undefined) delete process.env.AMC_STATE_DIR; else process.env.AMC_STATE_DIR = oldLockDir; await fixture.cleanup(); }
 });

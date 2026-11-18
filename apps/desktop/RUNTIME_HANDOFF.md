@@ -26,9 +26,9 @@ Registrations are stored as `<dataDir>/codex.runtime.json` and `<dataDir>/openco
 
 ## Lifecycle Rules
 
-Codex requires exactly `codex-cli 0.169.0` and uses `codex app-server --listen ws://127.0.0.1:8897`. Explicit startup checks port occupancy, launches detached, records its PID/identity and performs `initialize` then `initialized`. An occupied unregistered port is rejected, not adopted or killed. An existing registered live process with a failed handshake is retained and never restarted. A newly launched process that fails its handshake remains recorded for inspection. A later explicit start may launch again only after its registered PID is gone. There is no native kill/stop method in this manager. Desktop CLI sharing command: `codex --remote ws://127.0.0.1:8897`.
+Codex connects through `codex app-server --listen ws://127.0.0.1:8897`. Explicit startup checks the port, records the process identity and validates `initialize` and `initialized`. The adapter checks the native session list, model catalog and method declarations separately. The gateway reuses a live registered process across CLI upgrades. An explicit `pinned` policy checks the running process version. Desktop clients can share the endpoint with `codex --remote ws://127.0.0.1:8897`.
 
-OpenCode requires CLI and client 2.3.0. It loads only the locally installed `@opencode/client/service`, and uses `Service.discover()` plus `Service.headers()`. Existing services are registered/reused without `ensure()`. Failed discovery never calls `ensure()` in a probe or connection read. Even explicit startup refuses replacement if an earlier project registration exists, or if a native service registration exists but is incompatible/unresponsive.
+OpenCode requires compatible local service discovery, session HTTP and SSE interfaces. It loads only the locally installed `@opencode/client/service`, and uses `Service.discover()` plus `Service.headers()`. Existing services are registered/reused without `ensure()`. Failed discovery never calls `ensure()` in a probe or connection read. Even explicit startup refuses replacement if an earlier project registration exists, or if a native service registration exists but is incompatible/unresponsive.
 
 For first-time explicit OpenCode startup only, `serviceRegistrationFile` must be configured as the verified absolute path of the native 2.3.0 service registration file. Missing configuration blocks startup. A present or unreadable native registration blocks startup. Only a confirmed absent file permits `ensure()`, and only with the standard `opencode` command. The actual native registration path/format and ensure contract could not be tested without the target package; do not guess a path or pass an arbitrary nonexistent file. Simultaneous native startup by unrelated tools remains outside the project lock and requires target-version native validation.
 
@@ -38,7 +38,7 @@ Actual test runtime: cached Node `24.13.0` at `C:\Users\lenovo\AppData\Local\npm
 
 | Requirement | Local Evidence | Result |
 | --- | --- | --- |
-| Codex 0.169.0 | Installed `codex --version` returns `codex-cli 0.167.1` | Version mismatch; shared native startup/control validation blocked |
+| Codex app-server | Windows CLI 0.167.1 and 0.145.0 | Shared handshake, native history, second order in the original thread and separate new thread exercised with a loopback model fixture |
 | Claude Agent SDK 0.3.325 | Absent from project node_modules and inspected npm cache listing | Local dependency not provided |
 | Claude Code 2.1.325 | No `claude` command on PATH | Local executable not provided |
 | OpenCode client 2.3.0 | Absent from project node_modules and inspected npm cache listing | Local dependency not provided |

@@ -68,8 +68,10 @@ test('DSH plugin replacement without the original cancel acknowledgement leaves 
 });
 
 test('Claude checks the explicit CLI executable version and never advertises model choices without a catalog',async t=>{
-  const f=nativeContext('claude-code');const a=new ClaudeCodeAdapter('claude-code',{command:'must-not-run',executablePath:process.execPath,expectedVersion:'2.1.325 (Claude Code)'},f.context);await assert.rejects(a.checkVersion(),/does not match exact CLI/);
-  a.config.expectedVersion='2.1.324 (Claude Code)';await assert.rejects(a.checkVersion(),/requires exact CLI/);
+  const f=nativeContext('claude-code');const a=new ClaudeCodeAdapter('claude-code',{command:'must-not-run',executablePath:process.execPath,expectedVersion:'2.1.325 (Claude Code)'},f.context);
+  await a.checkVersion();assert.equal(a.observedVersion,process.version);
+  a.config.compatibilityMode='pinned';await assert.rejects(a.checkVersion(),/已固定版本/);
+  a.config.expectedVersion=process.version;await a.checkVersion();
   t.mock.method(a,'loadSdk',async()=>({query:()=>{}}));t.mock.method(a,'checkVersion',async()=>{});const result=await a.probe();assert.deepEqual(result.models,[]);assert.equal(result.capabilities.models,false);
 });
 

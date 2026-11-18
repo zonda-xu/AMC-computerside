@@ -8,9 +8,7 @@ import type { AgentAdapter, Decision, Interaction, ModelIdentity, Session, Submi
 import { ACTIVE } from '../../protocol/src/types.ts';
 import { AdapterBase } from '../common/base.ts';
 import { loadNativeModule } from '../common/native-module.ts';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { nativeCommand } from '../common/command.ts';
+import { matchesPinnedVersion } from '../../protocol/src/compatibility.ts';
 import { catalogModel, uniqueModels } from '../common/models.ts';
 
 type Native=Record<string,any>;
@@ -40,9 +38,16 @@ export class ClaudeCodeAdapter extends AdapterBase implements AgentAdapter {
   }
   control={create:true,submit:true,observe:true,approve:true,answer:true,cancel:true,resume:true,configure:true};
   live=new Map<string,Live>(); starting=new Map<string,Promise<Live>>(); lost=new Set<string>();
-  async loadSdk(){const module=this.config.sdkModule||'@anthropic-ai/claude-agent-sdk';try{const sdk=await loadNativeModule(module,'@anthropic-ai/claude-agent-sdk','0.3.325');if(typeof sdk.query!=='function')throw new Error('query export unavailable');return sdk;}catch(e){throw new Error(`Claude official SDK unavailable (${module}): ${e instanceof Error?e.message:String(e)}`);}}
+  async loadSdk(requireQuery = true) {
+    const specifier = this.config.sdkModule || '@anthropic-ai/claude-agent-sdk';
+    try {
+      const sdk = await loadNativeModule(specifier, '@anthropic-ai/claude-agent-sdk');
+      if (requireQuery && typeof sdk.query !== 'function') throw new Error('query export unavailable');
+      return sdk;
+    } catch (error) { throw new Error(`Claude official SDK unavailable (${specifier}): ${(error as Error).message}`); }
+  }
   async executable(){const path=this.config.executablePath||this.config.command;if(!isAbsolute(path))throw new Error('Claude requires an explicit absolute local pathToClaudeCodeExecutable');await access(path);return path;}
-  async checkVersion(){if(this.config.enabled===false)throw new Error('Claude runtime disabled');if(this.config.expectedVersion!=='2.1.325 (Claude Code)')throw new Error('Claude requires exact CLI 2.1.325 (Claude Code) and official SDK 0.3.325');const native=nativeCommand(await this.executable());const {stdout}=await promisify(execFile)(native.command,[...native.args,'--version'],{env:this.env,timeout:10000,windowsHide:true});if(stdout.trim()!==this.config.expectedVersion)throw new Error('Claude executable does not match exact CLI 2.1.325 (Claude Code)');}
+  async versionCommand(){return this.executable();}
   private scopes = new Map<string,string>();
   async readScope(cwd: string) { return accountScope(await this.executable(),cwd,this.env); }
   private async checkScope(s: Session) {
@@ -87,7 +92,7 @@ export class ClaudeCodeAdapter extends AdapterBase implements AgentAdapter {
     const live=this.live.get(id);if(!live)return;
     if(f.type==='system'&&f.subtype==='init'){
       if(typeof f.session_id!=='string'||!f.session_id){live.rejectInit(new Error('SDK init missing native session_id'));return;}
-      if(f.claude_code_version!==undefined&&f.claude_code_version!=='2.1.325'){live.rejectInit(new Error('SDK initialized an unexpected Claude Code version'));if(live.attached)this.fault(id,new Error('Claude Code native version mismatch'));return;}
+      if(this.config.compatibilityMode==='pinned' && !matchesPinnedVersion(String(f.claude_code_version || ''),this.config.expectedVersion)){live.rejectInit(new Error('SDK initialized a Claude Code version outside the configured pin'));if(live.attached)this.fault(id,new Error('Claude Code native version mismatch'));return;}
       if(live.nativeId&&live.nativeId!==f.session_id){this.lost.add(id);live.input.close();live.rejectInit(new Error('SDK resumed a different session'));if(live.attached)this.fault(id,new Error('SDK native identity mismatch'));return;}
       if(typeof f.model==='string'&&f.model)live.model={providerId:'anthropic',modelId:f.model,label:f.model};live.nativeId=f.session_id;if(live.generation===undefined){live.generation=this.context.openConnection([id],live.identity);this.epoch=live.generation;}live.initialized(f.session_id);if(!live.attached)return;
     }
@@ -137,7 +142,22 @@ export class ClaudeCodeAdapter extends AdapterBase implements AgentAdapter {
     if(!p.finish(result))throw new Error('Claude request already settled');
   }
   async configure(s:Session,model:ModelIdentity){const live=this.live.get(s.id);if(live?.active)throw new Error('Change model between turns');if(live){if(typeof live.query.setModel!=='function')throw new Error('SDK Query.setModel unavailable');await live.query.setModel(model.modelId);}}
-  async probe(){const result=await super.probe();try{await this.loadSdk();await this.checkVersion();const attached=[...this.live.values()].some(l=>l.attached&&l.nativeId);result.installed=true;result.version=this.config.expectedVersion;result.controlCapabilities=attached?this.control:{create:true,submit:false,observe:false,approve:false,answer:false,cancel:false,resume:false};result.detail=attached?'Official SDK Query connected':'Official SDK and explicit executable available for Query creation; authentication unverified until native initialization';result.capabilities={text:true,image:false,files:false,history:true,permission:true,questions:true,cancelScope:'owned Query current execution',models:true};try{result.models=await this.listModels();}catch(error){result.capabilities.models=false;result.detail+='; model catalog unavailable: '+String(error);}}catch(e){result.detail=e instanceof Error?e.message:String(e);}return result;}
+  async probe() {
+    const result = await super.probe();
+    try {
+      const sdk = await this.loadSdk();
+      await this.checkVersion();
+      const attached = [...this.live.values()].some(live => live.attached && live.nativeId);
+      result.installed = true;
+      result.controlCapabilities = attached ? this.control : { create:true, submit:false, observe:false, approve:false, answer:false, cancel:false, resume:false };
+      result.detail = attached ? 'Official SDK Query connected' : 'Official SDK and explicit executable available for Query creation; authentication unverified until native initialization';
+      result.capabilities = { text:true, image:false, files:false, history:typeof sdk.listSessions === 'function' && typeof sdk.getSessionMessages === 'function',
+        permission:true, questions:true, cancelScope:'owned Query current execution', models:true };
+      try { result.models = await this.listModels(); }
+      catch (error) { result.capabilities.models = false; result.detail += '; model catalog unavailable: ' + String(error); }
+    } catch (error) { result.detail = (error as Error).message; }
+    return result;
+  }
   async releaseSession(s: Session) {
     const live=this.live.get(s.id);
     if(!live)return;

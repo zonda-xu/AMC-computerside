@@ -12,9 +12,10 @@ export class ClaudeExternalProvider implements ExternalSessionProvider {
   adapter:ClaudeCodeAdapter;
   constructor(adapter:ClaudeCodeAdapter){this.adapter=adapter;}
   async profile():Promise<ExternalProfile>{
-    const profile=closedProfile(this.engineId,this.adapter.config.expectedVersion,'Claude 外部 CLI 的运行状态与控制句柄未提供；可读取历史，已由本主机管理的会话可继续');
+    const profile=closedProfile(this.engineId,'','Claude 外部 CLI 的运行状态与控制句柄未提供；可读取历史，已由本主机管理的会话可继续');
     try{
-      const sdk=await this.adapter.loadSdk();await this.adapter.checkVersion();
+      const sdk=await this.adapter.loadSdk(false);await this.adapter.checkVersion();
+      profile.version=this.adapter.observedVersion;
       if(typeof sdk.listSessions!=='function'||typeof sdk.getSessionMessages!=='function')return profile;
       profile.profile='claude-official-sdk-transcripts';profile.namespace=createHash('sha256').update(JSON.stringify([this.adapter.context.runtimeInstanceId,this.adapter.config.executablePath,this.adapter.config.env?.CLAUDE_CONFIG_DIR||'default'])).digest('hex');
       profile.discover={state:'supported',reason:'Official SDK listSessions, scoped to the authorized project'};
@@ -27,12 +28,12 @@ export class ClaudeExternalProvider implements ExternalSessionProvider {
   async discover(cwd:string,cursor?:string):Promise<DiscoveryPage>{
     requireValue((await this.profile()).discover.state==='supported','external_unavailable','Claude SDK history unavailable',409);
     const offset=cursor?Number(cursor):0;requireValue(Number.isSafeInteger(offset)&&offset>=0&&offset<=5000,'external_cursor','Invalid history cursor');
-    const sdk=await this.adapter.loadSdk();const items=await sdk.listSessions({dir:cwd,includeWorktrees:false});requireValue(Array.isArray(items)&&items.length<=10000,'external_format','Invalid Claude session list');
+    const sdk=await this.adapter.loadSdk(false);const items=await sdk.listSessions({dir:cwd,includeWorktrees:false});requireValue(Array.isArray(items)&&items.length<=10000,'external_format','Invalid Claude session list');
     const matches=[];for(const item of items){if(typeof item.sessionId!=='string'||typeof item.cwd!=='string')continue;if(await realpath(item.cwd).catch(()=>'')!==cwd)continue;matches.push({nativeId:item.sessionId,cwd,title:String(item.summary||item.customTitle||'Claude Code')});}
     return{items:matches.slice(offset,offset+100),cursor:offset+100<matches.length?String(offset+100):undefined};
   }
   async history(cwd:string,nativeId:string,cursor?:string){
-    const sdk=await this.adapter.loadSdk();const sessions=await sdk.listSessions({dir:cwd,includeWorktrees:false});
+    const sdk=await this.adapter.loadSdk(false);const sessions=await sdk.listSessions({dir:cwd,includeWorktrees:false});
     const info=sessions.find((s:any)=>s.sessionId===nativeId);
     requireValue(info&&typeof info.cwd==='string'&&await realpath(info.cwd).catch(()=>'')===cwd,'source_changed','Claude session/workspace mismatch',409);
     const offset=cursor?Number(cursor):0;requireValue(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'external_cursor','Invalid message cursor');

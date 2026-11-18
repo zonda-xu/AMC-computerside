@@ -1,5 +1,5 @@
 import type { AgentAdapter, Decision, Interaction, ModelIdentity, Session, Submission, Workspace } from '../../protocol/src/types.ts';
-import { AdapterBase } from '../common/base.ts';
+import { AdapterBase, checkRuntimePolicy } from '../common/base.ts';
 import { createHash } from 'node:crypto';
 import { validateFormAnswer } from '../../protocol/src/validation.ts';
 import { loadNativeModule } from '../common/native-module.ts';
@@ -20,9 +20,12 @@ export class OpenCodeAdapter extends AdapterBase implements AgentAdapter {
   submittedInputs=new Map<string,{runId?:string;requestId:string;id:string}>();
   activeSnapshots=new Set<string>(); refreshing=new Map<string,Promise<void>>(); refreshAgain=new Set<string>();
   observedBoundaries=new Map<string,number>(); recoveryWarnings=new Set<string>();
-  async discover(){const module=this.config.serviceModule||'@opencode/client/service';try{const {Service}=await loadNativeModule(module,'@opencode/client','2.3.0');if(typeof Service?.discover!=='function'||typeof Service?.headers!=='function')throw new Error('Service.discover/headers unavailable');const endpoint=await Service.discover();if(!endpoint)throw new Error('No matching registered v2 service; inspect registry/PID/version. Service.ensure will not be called');const url=new URL(endpoint.url);if(!['http:','https:'].includes(url.protocol)||!['127.0.0.1','localhost','[::1]'].includes(url.hostname))throw new Error('Registered OpenCode service must be loopback');return{url:url.href,headers:Service.headers(endpoint) as HeadersInit,identity:createHash('sha256').update(JSON.stringify(endpoint)).digest('hex')};}catch(e){throw new Error(`OpenCode v2 discovery unavailable (${module}): ${e instanceof Error?e.message:String(e)}`);}}
+  async discover(){const module=this.config.serviceModule||'@opencode/client/service';try{const {Service}=await loadNativeModule(module,'@opencode/client');if(typeof Service?.discover!=='function'||typeof Service?.headers!=='function')throw new Error('Service.discover/headers unavailable');const endpoint=await Service.discover();if(!endpoint)throw new Error('No matching registered v2 service; inspect registry/PID. Service.ensure will not be called');const url=new URL(endpoint.url);if(!['http:','https:'].includes(url.protocol)||!['127.0.0.1','localhost','[::1]'].includes(url.hostname))throw new Error('Registered OpenCode service must be loopback');return{url:url.href,headers:Service.headers(endpoint) as HeadersInit,identity:createHash('sha256').update(JSON.stringify(endpoint)).digest('hex')};}catch(e){throw new Error(`OpenCode v2 discovery unavailable (${module}): ${e instanceof Error?e.message:String(e)}`);}}
   async connection(){if(this.endpoint&&this.controller)return;if(this.connecting)return this.connecting;const promise=this.connect();this.connecting=promise;try{await promise;}finally{this.connecting=undefined;}}
-  async checkVersion(){if(!/^(?:opencode )?2\.3\.0$/.test(this.config.expectedVersion))throw new Error('OpenCode requires the exact client/CLI 2.3.0 v2 protocol target');await super.checkVersion();}
+  async checkVersion() {
+    if (this.config.compatibilityMode === 'pinned') await super.checkVersion();
+    else checkRuntimePolicy(this.config, '');
+  }
    async connect(){if(this.config.enabled===false)throw new Error('OpenCode runtime disabled');await this.checkVersion();const endpoint=await this.discover();const identity=endpoint.identity||endpoint.url;const changed=this.endpoint&&(this.endpoint.identity||this.endpoint.url)!==identity;
     if(changed&&this.byNative.size)throw new Error('OpenCode registered service identity changed; explicit runtime reconciliation required');
     for(const id of this.byNative.values()){const binding=this.context.getSession(id).binding;if(binding?.nativeIdentity&&binding.nativeIdentity!==identity)throw new Error('OpenCode registered service differs from persisted session binding');}
@@ -191,7 +194,26 @@ export class OpenCodeAdapter extends AdapterBase implements AgentAdapter {
     else{if(d.cancelled)throw new Error('OpenCode form cancellation reply is not specified');if(!d.answer||typeof d.answer!=='object'||Array.isArray(d.answer))throw new Error('OpenCode form requires a typed answer keyed by native field key');validateFormAnswer(p.fields,d.answer);body={answer:d.answer};}
     p.responding=true;try{await this.http(this.path(s.ref.nativeSessionId,`/${p.kind==='permission'?'permission':'form'}/${encodeURIComponent(String(i.nativeId))}/reply`),'POST',body);this.pending.delete(key);this.context.emit(s.id,'interaction.closed',{id:i.id});}catch(e){p.responding=false;throw e;}
   }
-  async probe(){const result=await super.probe();if(!result.installed||result.version!==this.config.expectedVersion||!/^(?:opencode )?2\.3\.0$/.test(result.version)){result.detail='OpenCode control unavailable: exact configured and installed CLI 2.3.0 is required';return result;}try{await this.connection();await this.http('/api/session?limit=1');result.installed=true;result.controlCapabilities=this.control;result.generation=this.epoch;result.connectionState='attached';result.nativeIdentity=this.endpoint?.identity||this.endpoint?.url;result.detail='Connected to discovered v2 HTTP and SSE service; model authentication requires execution validation';result.capabilities={text:true,image:false,files:false,history:true,permission:true,questions:true,cancelScope:'session current execution; no atomic turn comparison',models:true};try{result.models=await this.listModels();}catch(error){result.capabilities.models=false;result.detail+='; model catalog unavailable: '+String(error);}}catch(e){result.detail=e instanceof Error?e.message:String(e);}return result;}
+  async probe() {
+    const result = await super.probe();
+    try {
+      checkRuntimePolicy(this.config, result.version);
+      await this.connection();
+      const page = await this.http('/api/session?limit=1');
+      if (!Array.isArray(page?.data)) throw new Error('OpenCode /api/session 未返回会话列表');
+      result.installed = true;
+      result.version ||= 'unknown';
+      result.controlCapabilities = this.control;
+      result.generation = this.epoch;
+      result.connectionState = 'attached';
+      result.nativeIdentity = this.endpoint?.identity || this.endpoint?.url;
+      result.detail = '已连接本机 OpenCode 会话接口和 SSE 事件流。';
+      result.capabilities = { text:true, image:false, files:false, history:true, permission:true, questions:true, cancelScope:'session current execution; no atomic turn comparison', models:true };
+      try { result.models = await this.listModels(); }
+      catch (error) { result.capabilities.models = false; result.detail += ' 模型目录不可用：' + String(error); }
+    } catch (error) { result.detail = (error as Error).message; }
+    return result;
+  }
   async releaseSession(s: Session) {
     await this.connection();
     const native=s.ref.nativeSessionId;

@@ -19,7 +19,7 @@ test('Codex uses one shared WS, preserves typed approval IDs, resumes without sp
   const f=nativeContext();const server=new WebSocketServer({host:'127.0.0.1',port:0});await once(server,'listening');const address=server.address();if(typeof address==='string'||!address)throw new Error('No listener');
   let connections=0;const calls:any[]=[];const answers:any[]=[];
   server.on('connection',socket=>{connections++;socket.on('message',raw=>{const m=JSON.parse(raw.toString());if(!m.method){answers.push(m);return;}calls.push(m);if(m.id===undefined)return;
-    let result:any={};if(m.method==='thread/start')result={thread:{id:'native'}};
+    let result:any=m.method==='initialize'?{userAgent:'codex-fixture'}:{};if(m.method==='thread/start')result={thread:{id:'native'}};
     if(m.method==='thread/resume')result={thread:{id:'native',status:{type:'idle'},turns:[]}};
     if(m.method==='thread/read')result={thread:{id:'native',cwd:f.session.cwd,status:{type:'idle'},turns:[]}};
     if(m.method==='turn/start'){socket.send(JSON.stringify({method:'turn/completed',params:{threadId:'native',turn:{id:'turn-1',status:'completed'}}}));result={turn:{id:'turn-1'}};}
@@ -41,11 +41,20 @@ test('Codex additional permissions and user input return distinct native shapes'
   a.request({id:42,method:'item/tool/requestUserInput',params:{threadId:'native',questions:[{id:'q',question:'Choose',options:null,isSecret:true}],isBlocking:true}});assert.equal((f.session.interactions[1].questions[0] as unknown as Record<string,unknown>).isSecret,true);await a.respond(f.session,f.session.interactions[1],{interactionId:'y',epoch:1,answers:{q:['secret-contract-value']}});assert.deepEqual(responses[1],{id:42,result:{answers:{q:{answers:['secret-contract-value']}}}});assert.equal(f.events.some(e=>JSON.stringify(e.data).includes('secret-contract-value')),false);
 });
 
-test('Codex probe never opens control on a version-only mismatch or failed installation',async t=>{
+test('Codex probes older installations, isolates missing optional methods and respects explicit pins',async t=>{
   const f=nativeContext();const a=new CodexAdapter('codex',{command:'must-not-spawn',expectedVersion:'codex-cli 0.169.0'},f.context);let version='codex-cli 0.167.1';let installed=true;let connections=0;
   t.mock.method(AdapterBase.prototype,'probe',async():Promise<RuntimeDescriptor>=>({id:'codex',runtimeInstanceId:'runtime',version,installed,authentication:'unknown',verified:false,detail:'Synthetic version evidence',capabilities:{text:false,image:false,files:false,history:false,permission:false,questions:false,cancelScope:'unavailable',models:false},models:[]}));
-  t.mock.method(a,'connection',async()=>{connections++;return {} as WebSocketRpc;});t.mock.method(a,'listModels',async()=>[]);
-  assert.equal((await a.probe()).capabilities.text,false);assert.equal(connections,0);version='codex-cli 0.169.0';installed=false;assert.equal((await a.probe()).capabilities.text,false);assert.equal(connections,0);installed=true;const connected=await a.probe();assert.equal(connected.controlCapabilities?.create,true);assert.equal(connected.verified,false);assert.equal(connections,1);a.config.expectedVersion='codex-cli 0.167.1';assert.equal((await a.probe()).capabilities.text,false);assert.equal(connections,1);await assert.rejects(a.checkVersion(),/rust-v0.169.0/);
+  let listAvailable=true;
+  t.mock.method(a,'connection',async()=>{connections++;return {request:async(method:string)=>listAvailable?
+    method==='thread/list'?{data:[{id:'native',cwd:f.workspace.path}]}:{thread:{id:'native',cwd:f.workspace.path}}:{wrong:true}} as unknown as WebSocketRpc;});
+  t.mock.method(a,'listModels',async()=>{throw new Error('model/list unavailable');});
+  const older=await a.probe();
+  assert.equal(older.capabilities.history,true);assert.equal(older.capabilities.models,false);assert.equal(older.verified,false);
+  listAvailable=false;version='codex-cli 9.1.0';
+  const partial=await a.probe();assert.equal(partial.capabilities.history,false);assert.equal(partial.connectionState,'attached');
+  a.config.compatibilityMode='pinned';
+  assert.equal((await a.probe()).capabilities.text,false);assert.equal(connections,2);await assert.rejects(a.checkVersion(),/已固定版本/);
+  version=a.config.expectedVersion;installed=false;assert.equal((await a.probe()).capabilities.text,false);assert.equal(connections,2);
 });
 
 test('Claude persistent official SDK boundary consumes queue, settles permission once, confirms result and resumes same session',async t=>{

@@ -139,13 +139,25 @@ export interface ComponentAssessment {
   permittedToProbe: boolean;
   reason: string;
 }
-export function assessComponentVersion(engineId:EngineId,component:NativeComponent,actual:string,mode:CompatibilityPolicy['mode']='latest-compatible',expected?:string):ComponentAssessment {
-  const target=compatibilityProfile(engineId).components.find(entry=>entry.component===component);
-  const baseline=target?.version??'';const installed=parseNativeVersion(actual);const floor=parseNativeVersion(baseline);
-  const pinned=parseNativeVersion(expected??baseline);
-  const comparison=installed&&floor?compareNativeVersions(installed,floor):-1;
-  const permittedToProbe=!!installed&&!!floor&&comparison>=0&&(mode!=='pinned'||!!pinned&&installed.canonical===pinned.canonical);
-  return{component,actual,baseline,candidate:permittedToProbe&&comparison>0,permittedToProbe,reason:!installed?'Missing or invalid component version':!floor?'No component contract profile':comparison<0?'Component is older than profile baseline':mode==='pinned'&&!permittedToProbe?'Pinned version does not match':'Eligible for protocol probing only; no control capability is granted by a version'};
+function versionIdentity(raw?: string): string | undefined {
+  const label = raw?.trim();
+  if (!label || label.length > 256 || /[\x00-\x1f\x7f]/.test(label)) return undefined;
+  return parseNativeVersion(label)?.canonical ?? label;
+}
+
+export function matchesPinnedVersion(actual: string, expected?: string): boolean {
+  const pinned = versionIdentity(expected);
+  return !!pinned && pinned !== 'unknown' && pinned === versionIdentity(actual);
+}
+
+export function assessComponentVersion(engineId: EngineId, component: NativeComponent, actual: string,
+  mode: CompatibilityPolicy['mode'] = 'latest-compatible', expected?: string): ComponentAssessment {
+  const baseline = compatibilityProfile(engineId).components.find(entry => entry.component === component)?.version ?? '';
+  const permittedToProbe = !!baseline && !!versionIdentity(actual) && (mode !== 'pinned' || matchesPinnedVersion(actual, expected));
+  const installed = parseNativeVersion(actual), reference = parseNativeVersion(baseline);
+  return { component, actual, baseline, permittedToProbe, candidate: !!(permittedToProbe && installed && reference && compareNativeVersions(installed, reference) > 0),
+    reason: !baseline ? 'No component contract profile' : !versionIdentity(actual) ? 'Missing component version' :
+      !permittedToProbe ? 'Pinned version does not match' : 'Eligible for native protocol probing' };
 }
 export interface CompatibilityAssessment {
   mode: CompatibilityPolicy['mode'];
@@ -172,22 +184,16 @@ export function validateProtocolEvidence(descriptor: CompatibilityDescriptor, ev
   if (!evidence) { valid = false; reason = 'Missing protocol evidence'; }
   else if (evidence.profileId !== profile.id || evidence.engineId !== descriptor.id || evidence.runtimeInstanceId !== descriptor.runtimeInstanceId || evidence.generation !== descriptor.generation || evidence.configurationId !== descriptor.configurationId) {
     valid = false; reason = 'Evidence runtime, profile, generation or configuration mismatch';
-  } else if (!parseNativeVersion(descriptor.version) || parseNativeVersion(descriptor.version)?.canonical !== parseNativeVersion(actual[profile.primary] ?? '')?.canonical) {
+  } else if (!versionIdentity(descriptor.version) || versionIdentity(descriptor.version) !== versionIdentity(actual[profile.primary])) {
     valid = false; reason = 'Conflicting descriptor primary version';
-  } else if (profile.components.some(target => {
-    const installed = parseNativeVersion(actual[target.component] ?? '');
-    const baseline = parseNativeVersion(target.version);
-    return !installed || !baseline || compareNativeVersions(installed, baseline) < 0;
-  })) {
-    valid = false; reason = 'Missing, invalid or below-baseline component version';
+  } else if (profile.components.some(({ component }) => !versionIdentity(actual[component]))) {
+    valid = false; reason = 'Missing component identity';
   } else if (!descriptor.runtimeInstanceId.trim() || !descriptor.configurationId.trim() || !Number.isSafeInteger(descriptor.generation) || descriptor.generation < 0) {
     valid = false; reason = 'Invalid runtime evidence scope';
   } else if (!Number.isFinite(options.now) || !Number.isFinite(maxAge) || maxAge < 0 || !Number.isFinite(evidence.observedAt) || evidence.observedAt > options.now || options.now - evidence.observedAt > maxAge) {
     valid = false; reason = 'Stale evidence or invalid evidence clock';
   } else if (profile.components.some(({ component }) => {
-    const observed = parseNativeVersion(evidence.versions[component] ?? '');
-    const installed = parseNativeVersion(actual[component] ?? '');
-    return !observed || !installed || observed.canonical !== installed.canonical;
+    return versionIdentity(evidence.versions[component]) !== versionIdentity(actual[component]);
   })) { valid = false; reason = 'Evidence component version mismatch'; }
   const proven = (group: ProtocolOperationGroup): boolean => {
     if (!valid || !evidence) return false;
@@ -214,21 +220,15 @@ export function assessCompatibility(descriptor: CompatibilityDescriptor, options
   const components = profile.components.map(target => {
     baseline[target.component] = target.version;
     const raw = actual[target.component];
-    const parsed = parseNativeVersion(raw ?? '');
-    const floor = parseNativeVersion(target.version);
-    const pinned = policy.mode === 'pinned' ? parseNativeVersion(policy.targets[target.component] ?? '') : undefined;
-    const comparison = parsed && floor ? compareNativeVersions(parsed, floor) : -1;
-    let permittedToProbe = !!parsed && comparison >= 0;
-    let reason = !parsed ? 'Missing or invalid component version' : comparison < 0 ? 'Component is older than profile baseline' : 'Version eligible for protocol probing only';
-    if (policy.mode === 'pinned' && (!pinned || parsed?.canonical !== pinned.canonical || !policy.configurationId.trim() || policy.configurationId !== descriptor.configurationId)) {
-      permittedToProbe = false;
-      reason = 'Pinned policy requires an exact component target and configuration match';
+    const checked = assessComponentVersion(descriptor.id, target.component, raw ?? '', policy.mode,
+      policy.mode === 'pinned' ? policy.targets[target.component] : undefined);
+    if (policy.mode === 'pinned' && (!policy.configurationId.trim() || policy.configurationId !== descriptor.configurationId)) {
+      return { ...checked, permittedToProbe: false, candidate: false, reason: 'Pinned configuration does not match' };
     }
-    return { component: target.component, actual: raw, baseline: target.version, candidate: permittedToProbe && comparison > 0, permittedToProbe, reason };
+    return checked;
   });
-  const primary = parseNativeVersion(descriptor.version);
-  const explicitPrimary = parseNativeVersion(actual[profile.primary] ?? '');
-  const consistent = !!primary && primary.canonical === explicitPrimary?.canonical;
+  const primary = versionIdentity(descriptor.version);
+  const consistent = !!primary && primary === versionIdentity(actual[profile.primary]);
   const permittedToProbe = consistent && components.every(component => component.permittedToProbe);
   const blocked = components.find(component => !component.permittedToProbe);
   const reason = !consistent ? 'Descriptor primary version conflicts with component versions or is invalid' : blocked ? blocked.reason : 'Eligible to probe; version matching alone never establishes protocol support';
@@ -249,5 +249,5 @@ export function compareLatestMetadata(actual: string, latest: string, baseline: 
   const floor = parseNativeVersion(baseline);
   if (!installed || !available || !floor) return { actual, latest, relation: 'invalid', candidate: false, reason: 'Invalid installed, metadata or baseline version' };
   const comparison = compareNativeVersions(available, installed);
-  return { actual, latest, relation: comparison < 0 ? 'older' : comparison > 0 ? 'newer' : 'equal', candidate: comparison > 0 && compareNativeVersions(available, floor) >= 0, reason: 'Metadata is advisory only; installing or enabling controls requires separate policy and protocol evidence' };
+  return { actual, latest, relation: comparison < 0 ? 'older' : comparison > 0 ? 'newer' : 'equal', candidate: comparison > 0, reason: 'Metadata is advisory only; installing or enabling controls requires separate policy and protocol evidence' };
 }

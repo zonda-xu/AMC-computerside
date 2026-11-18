@@ -42,8 +42,8 @@ await mkdir(c.dataDir,{recursive:true,mode:0o700});
 const store=new Store(join(c.dataDir,'console.sqlite'));store.recover();
 const core=new Core(store,c.hostId,await Promise.all(c.allowedWorkspaceRoots.map(canonical)));
 if(c.runtimes.codex.enabled!==false){
-  try{const registered=await new RuntimeManager(c.dataDir).connect('codex',c.runtimes.codex);c.runtimes.codex={...c.runtimes.codex,endpoint:registered.endpoint,runtimeIdentity:registered.identity};}
-  catch{c.runtimes.codex={...c.runtimes.codex,runtimeIdentity:undefined};console.error('Codex shared runtime unavailable or unregistered; use explicit host runtime startup and restart the gateway');}
+  try{const registered=await new RuntimeManager(c.dataDir).connect('codex',c.runtimes.codex);c.runtimes.codex={...c.runtimes.codex,endpoint:registered.endpoint,runtimeIdentity:registered.identity,registeredVersion:registered.version};}
+  catch(error){c.runtimes.codex={...c.runtimes.codex,runtimeIdentity:undefined,registeredVersion:undefined};console.error('Codex 共享运行时未连接：',(error as Error).message);}
 }
 const codex=new CodexAdapter('codex',c.runtimes.codex,core.context('codex'));core.adapters.set('codex',codex);
 core.external.providers.set('codex',new CodexExternalProvider(codex));
@@ -63,7 +63,8 @@ const pushTransport=c.push?await HuaweiPushTransport.load(c.push):undefined;
 const push=new PushCoordinator(store,c.hostId,{transport:pushTransport,authorize:async(session,signal)=>{signal.throwIfAborted();core.workspaceIdentities.verify(session.ref.workspaceId,true);return true;}});
 store.notificationIntent=(event,session)=>{push.enqueue(session.id,event.seq);};
 const server=makeServer(core,{cert:await readFile(c.certFile),key:await readFile(c.keyFile),minVersion:'TLSv1.2'},{name:c.name,os:c.os},push);
-const bridgeTokenFile=c.runtimes['deepseek-harness'].bridgeTokenFile;
+const bridgeConfig=c.runtimes['deepseek-harness'];
+const bridgeTokenFile=bridgeConfig.enabled!==false && bridgeConfig.expectedVersion!=='DISABLED' ? bridgeConfig.bridgeTokenFile : undefined;
 const bridgeToken=bridgeTokenFile?(await readFile(bridgeTokenFile,'utf8')).trim():'';
 if(bridgeTokenFile&&(!bridgeToken||Buffer.byteLength(bridgeToken)>4096))throw new Error('Invalid DSH bridge token configuration');
 const bridgeHTTP=createServer((_req,res)=>res.writeHead(404).end());const bridgeWS=new WebSocketServer({noServer:true,maxPayload:8*1024*1024});
@@ -71,7 +72,22 @@ bridgeHTTP.on('upgrade',(req,socket,head)=>{const token=Buffer.from(req.headers.
 let stopping=false;
 async function shutdown(code=0){if(stopping)return;stopping=true;server.close();bridgeHTTP.close();bridgeWS.close();runtimeUpdates.stop();await Promise.all([discovery.close(),externalSync.close(),core.external.close(),push.stop(),runtimeRecovery.close()]);for(const a of core.adapters.values())a.close();await core.drain();await unlink(lockPath).catch(()=>{});store.close();process.exit(code);}
 const listen=(server:import('node:net').Server,port:number,address:string)=>new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(port,address,resolve);});
-try{await Promise.all([listen(bridgeHTTP,8898,'127.0.0.1'),listen(server,c.port,c.listen)]);discovery.start();externalSync.start();push.start();runtimeRecovery.start();runtimeUpdates.start();console.log(`AI Maid Café: ${c.name} (${c.hostId}) — ${c.listen}:${c.port}`);process.send?.({type:'ready'});}catch(e){console.error((e as Error).message);await shutdown(1);}
+try {
+  const listeners = [listen(server, c.port, c.listen)];
+  if (bridgeToken) listeners.push(listen(bridgeHTTP, 8898, '127.0.0.1'));
+  await Promise.all(listeners);
+  discovery.start();externalSync.start();push.start();runtimeRecovery.start();runtimeUpdates.start();
+  console.log(`AI Maid Café: ${c.name} (${c.hostId}) — ${c.listen}:${c.port}`);
+  process.send?.({type:'ready'});
+} catch (error) {
+  const failure = error as NodeJS.ErrnoException & { port?:number };
+  if (process.connected && process.send && failure.port && ['EADDRINUSE','EADDRNOTAVAIL','EACCES'].includes(failure.code || '')) {
+    const message = { type:'listen-failed', code:failure.code, port:failure.port };
+    await new Promise<void>(done => process.send!(message, undefined, undefined, () => done()));
+  }
+  console.error(failure.message);
+  await shutdown(1);
+}
 process.on('message',(message: {type?:string; requestId?:string; input?:Record<string,unknown>})=>{
   if(message?.type !== 'session-library' || !message.requestId || !message.input) return;
   void desktopCatalog(core,message.input,true).then(
