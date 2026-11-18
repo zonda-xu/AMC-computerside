@@ -54,7 +54,7 @@ export function codexHandshake(endpoint: string): Promise<void> {
     const timer = setTimeout(() => finish(new Error('Codex initialize timed out; existing runtime was not replaced')), 3000);
     socket.once('error', finish);
     socket.once('close', () => finish(new Error('Codex disconnected during initialize')));
-    socket.once('open', () => socket.send(JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ai-maid-cafe-desktop', version: '0.3.0' }, capabilities: { experimentalApi: true } } })));
+    socket.once('open', () => socket.send(JSON.stringify({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ai-maid-cafe-desktop', version: '1.0.0' }, capabilities: { experimentalApi: true } } })));
     socket.on('message', data => {
       try {
         const message = JSON.parse(data.toString());

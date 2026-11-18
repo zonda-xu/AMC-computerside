@@ -90,7 +90,7 @@
     {
       "path": "apps/desktop/src/runtime.ts",
       "bytes": 13075,
-      "sha256": "8011138604426c4d48b1b1d62f4c13e3132fe59680ce95050ab4a14bb3c2183b"
+      "sha256": "1c3f1c73ce448c337d2e5e74b8b51f98c3b44864cfca2313210a4dcb4408d7ce"
     },
     {
       "path": "apps/desktop/src/service.ts",
@@ -254,8 +254,8 @@
     },
     {
       "path": "docs/DESKTOP_RELEASE.md",
-      "bytes": 3723,
-      "sha256": "e40d03d6da02ecfb192b24d160580c84e6cbf1752cbaea0df94af7325644a467"
+      "bytes": 1156,
+      "sha256": "c5f65b8e5f0d10ed5914feae0cecf8c8933609cb777bede4b5770754fc475ed0"
     },
     {
       "path": "docs/DESKTOP_VALIDATION.md",
@@ -310,12 +310,12 @@
     {
       "path": "package-lock.json",
       "bytes": 17007,
-      "sha256": "86f27b43529874a6fe9f122bc7a83da492c88094ec55156a84a59af5ea6d2fd0"
+      "sha256": "75010b7cc0b5cb4bb4934ac30d5d304d8e991b4fd6c1a58b8a9ff6303d623699"
     },
     {
       "path": "package.json",
       "bytes": 1102,
-      "sha256": "fca79843827607db9bd9aa5367cf0d0ddb84f8c6df10f1385d58535b92093179"
+      "sha256": "1a9aa95fe9ddf4e51990ba82753bcea8b5c3a1114daecf5c289ce5f5462f89ad"
     },
     {
       "path": "packages/adapters/claude-code/external.ts",
