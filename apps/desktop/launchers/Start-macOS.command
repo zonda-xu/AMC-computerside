@@ -7,7 +7,7 @@ if ! command -v node >/dev/null 2>&1; then
   read -r reply
   exit 1
 fi
-node launch.mjs
+node launch.mjs "$@"
 result=$?
 if [ "$result" -ne 0 ]; then printf '%s\n' 'Press Enter to close.'; read -r reply; fi
 exit "$result"

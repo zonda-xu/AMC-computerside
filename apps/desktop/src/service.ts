@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import QRCode from 'qrcode';
 import { Core } from '../../gateway/src/core.ts';
+import { localProjectDirectories } from '../../gateway/src/local-project-catalog.ts';
+import { effectiveProjectPolicy } from '../../gateway/src/native-projects.ts';
 import { desktopCatalog } from '../../gateway/src/desktop-catalog.ts';
 import { canonical } from '../../gateway/src/files.ts';
 import { Store, digest } from '../../gateway/src/store.ts';
@@ -54,6 +56,7 @@ export class DesktopService {
   ready = false; busy = false; lastError = ''; gatewayLog = ''; authority = '';
   pairingHash = '';
   runtimes: RuntimeManager;
+  private offlineProjects?: { config: string; next: number; scan: Promise<unknown> };
   constructor(root: string) { this.root = resolve(root); this.runtimes = new RuntimeManager(this.root); }
   async config() {
     const config = await readConfig(this.root);
@@ -63,12 +66,19 @@ export class DesktopService {
   }
   async state() {
     const config = await this.config();
+    if (config && !this.child) {
+      const key = digest(JSON.stringify([config.dataDir, effectiveProjectPolicy(config), config.runtimes]));
+      if (!this.offlineProjects || this.offlineProjects.config !== key || this.offlineProjects.next < Date.now()) {
+        this.offlineProjects = { config: key, next: Date.now() + 60000, scan: this.sessions({operation:'project-sync'}).catch(() => undefined) };
+      }
+      await this.offlineProjects.scan;
+    }
     let devices: unknown[] = [], knownProjects: {path:string; engines:string[]}[] = [], pairingUsed = false;
     if (config) { const store = new Store(join(config.dataDir, 'console.sqlite')); try { devices = store.devices(); knownProjects = store.list<{path:string; engines:string[]}>('workspace-origins-v1').filter(p=>p.engines.length>0); pairingUsed = !!store.db.prepare('SELECT used FROM tickets WHERE hash=? AND used=1').get(this.pairingHash); } finally { store.close(); } }
     const runtimeStates = config ? await Promise.all((['codex', 'opencode'] as const).map(engine => this.runtimes.probe(engine, config.runtimes[engine]))) : [];
     return { protocolVersion: 2, ...hostDefaults(), defaultCreationRoot:defaultCreationRoot(), knownProjects, home: homedir(), root: this.root, running: this.ready, busy: this.busy, error: this.lastError, devices, pairingUsed, runtimeStates,
       config: config ? { name: config.name, hostId: config.hostId, address: config.listen, endpoint: config.publicEndpoint,
-        workspace: config.allowedWorkspaceRoots[0], legacyRoots:config.allowedWorkspaceRoots, projectPolicy:config.projectPolicy, runtimes: Object.fromEntries(engines.map(engine => { const runtime = config.runtimes[engine]; return [engine, { command: runtime.command, expectedVersion: runtime.expectedVersion, enabled: runtime.enabled, endpoint: engine === 'codex' ? runtime.endpoint : undefined }]; })),
+        workspace: config.allowedWorkspaceRoots[0], legacyRoots:config.allowedWorkspaceRoots, projectPolicy:effectiveProjectPolicy(config), runtimes: Object.fromEntries(engines.map(engine => { const runtime = config.runtimes[engine]; return [engine, { command: runtime.command, expectedVersion: runtime.expectedVersion, enabled: runtime.enabled, endpoint: engine === 'codex' ? runtime.endpoint : undefined }]; })),
         fingerprint: new X509Certificate(await readFile(config.caFile)).fingerprint256 } : null };
   }
   async exclusive<T>(fn: () => Promise<T>) {
@@ -169,7 +179,8 @@ export class DesktopService {
     const config=await this.config(); if (!config) throw new Error('请先保存主机配置');
     const store=new Store(join(config.dataDir,'console.sqlite'));
     try {
-      const core=new Core(store,config.hostId,await Promise.all(config.allowedWorkspaceRoots.map(canonical)),config.projectPolicy);
+      const core=new Core(store,config.hostId,await Promise.all(config.allowedWorkspaceRoots.map(canonical)),effectiveProjectPolicy(config));
+      core.projects.readLocal = engine => localProjectDirectories(engine, config.runtimes[engine]);
       return await desktopCatalog(core,input,false);
     } finally { store.close(); }
   }
@@ -206,7 +217,7 @@ export class DesktopService {
       case '/v2/project-settings': return this.exclusive(async () => {
         const config = await this.config();
         if (!config) throw new Error('请先保存主机配置。');
-        const previous = config.projectPolicy ?? {creationRoot:defaultCreationRoot(), syncEngines:[], manualProjects:[], excludedProjects:[]};
+        const previous = effectiveProjectPolicy(config) ?? {creationRoot:defaultCreationRoot(), syncEngines:[], manualProjects:[], excludedProjects:[]};
         const policy = typeof input.add === 'string' ? {...previous, manualProjects:[...previous.manualProjects,input.add], excludedProjects:previous.excludedProjects.filter(p=>p!==input.add)} : input.policy;
         config.projectPolicy = await normalizePolicy(policy,config.runtimes as SetupInput['runtimes'],config.projectPolicy);
         await writeConfig(this.root,config);
@@ -217,7 +228,8 @@ export class DesktopService {
       default: throw new Error('接口不存在。');
     }
   }
-  server() {
+  server(quit?: () => void) {
+    let exiting = false;
     return createServer(async (req, res) => {
       res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Referrer-Policy', 'no-referrer'); res.setHeader('X-Frame-Options', 'DENY');
@@ -229,6 +241,15 @@ export class DesktopService {
         if (req.headers.authorization !== `Bearer ${this.token}`) { res.writeHead(401).end(JSON.stringify({ error: '请从本机启动入口重新打开向导。' })); return; }
         try {
           if (req.method !== 'GET' && req.headers['content-type'] !== 'application/json') throw new Error('仅接受 JSON 请求。');
+          if (path === '/v2/instance' && req.method === 'GET') {
+            res.end(JSON.stringify({ application: 'amc-desktop', pid: process.pid, running: this.ready })); return;
+          }
+          if (path === '/v2/instance/close' && req.method === 'POST' && quit) {
+            await body(req);
+            if (!exiting) { exiting = true; res.once('finish', quit); }
+            res.end(JSON.stringify({ closing: true, running: this.ready || !!this.child })); return;
+          }
+          if (exiting) { res.writeHead(503).end(JSON.stringify({ error: '助手正在退出。' })); return; }
           const result = await this.api(path, req.method || '', req.method === 'POST' ? await body(req) : {});
           res.end(JSON.stringify(result));
         } catch (error) { res.writeHead(400).end(JSON.stringify({ error: (error as Error).message })); }

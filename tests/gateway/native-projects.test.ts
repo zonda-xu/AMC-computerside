@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, rename } from 'node:fs/promises';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { Core } from '../../apps/gateway/src/core.ts';
-import { type ProjectPolicy } from '../../apps/gateway/src/native-projects.ts';
+import { effectiveProjectPolicy, type ProjectPolicy } from '../../apps/gateway/src/native-projects.ts';
+import { localProjectDirectories } from '../../apps/gateway/src/local-project-catalog.ts';
 import { closedProfile, type ExternalSessionProvider } from '../../packages/adapters/common/external.ts';
 import { type EngineId } from '../../packages/protocol/src/types.ts';
 import { fixture, TestAdapter } from '../helpers.ts';
@@ -20,6 +22,61 @@ function source(engineId: EngineId, pages: string[][]): ExternalSessionProvider 
     history: async () => ({items:[]})
   };
 }
+
+test('v1.0.1 profiles discover enabled platform projects outside their old folders and retain existing creation grants', async () => {
+  const f = await fixture();
+  try {
+    const other = join(f.dir, 'other-platform-project');
+    await mkdir(other);
+    const roots = [f.w.path, f.wb.path];
+    const legacy = { allowedWorkspaceRoots: roots, runtimes: { codex: {}, opencode: { enabled: false }, 'deepseek-harness': { enabled: true }, 'claude-code': { expectedVersion: 'DISABLED' } } };
+    const policy = effectiveProjectPolicy(legacy)!;
+    assert.deepEqual(policy.syncEngines, ['codex', 'deepseek-harness']);
+    const core = new Core(f.store, f.core.hostId, roots, policy);
+    core.external.providers.set('codex', source('codex', [[other]]));
+    await core.projects.refresh();
+    assert.deepEqual(core.visibleWorkspaces().find(w => w.path === other)?.engines, ['codex']);
+    assert.deepEqual(core.projects.creationRoots, roots);
+    const created = await core.workspaceCreator.create('phone', 'after-upgrade', core.workspaceCreator.rootId(roots[1]), 'coffee', 'Coffee');
+    assert.equal(created.path, join(roots[1], 'coffee'));
+    const explicit: ProjectPolicy = { creationRoot: roots[1], syncEngines: [], manualProjects: [other], excludedProjects: [] };
+    assert.equal(effectiveProjectPolicy({ ...legacy, projectPolicy: explicit }), explicit);
+  } finally { await f.close(); }
+});
+
+test('offline project discovery reads the selected profiles for all four engines, including registered projects with no sessions', async () => {
+  const f = await fixture();
+  try {
+    const dir = f.dir;
+    const env = { CODEX_HOME: dir, DSH_HOME: dir, CLAUDE_CONFIG_DIR: dir, XDG_DATA_HOME: dir,
+      OPENCODE_DB: join(dir,'opencode.db'), DEVECO_DB: join(dir,'deveco.db') };
+    await writeFile(join(dir,'.codex-global-state.json'), JSON.stringify({'project-order':[f.w.path]}));
+    const threads = new DatabaseSync(join(dir,'state_5.sqlite'));
+    try { threads.exec('CREATE TABLE threads (cwd TEXT, archived INTEGER)'); threads.prepare('INSERT INTO threads VALUES (?,0)').run(f.wb.path); } finally { threads.close(); }
+    await mkdir(join(dir,'storages'));
+    await writeFile(join(dir,'storages','workspace.json'),JSON.stringify({tables:{workspaces:{first:{path:f.w.path,sessionIds:[]}}}}));
+    await writeFile(join(dir,'.claude.json'), JSON.stringify({projects:{[f.w.path]:{}}}));
+    const index = join(dir,'projects','encoded');
+    await mkdir(index,{recursive:true});
+    await writeFile(join(index,'sessions-index.json'),JSON.stringify({entries:[{projectPath:f.wb.path}]}));
+    for (const file of [env.OPENCODE_DB,env.DEVECO_DB]) {
+      const db = new DatabaseSync(file);
+      try {
+        db.exec('CREATE TABLE project (worktree TEXT); CREATE TABLE session (directory TEXT,time_archived INTEGER)');
+        db.prepare('INSERT INTO project VALUES (?)').run(f.w.path);
+        db.prepare('INSERT INTO session VALUES (?,NULL)').run(f.wb.path);
+      } finally { db.close(); }
+    }
+    for (const [engine,command] of [['codex','codex'],['claude-code','claude'],['opencode','opencode'],['opencode','deveco']] as const) {
+      assert.deepEqual((await localProjectDirectories(engine,{command,env})).sort(),[f.w.path,f.wb.path].sort());
+    }
+    const core = new Core(f.store, f.core.hostId, [], {creationRoot:dir,manualProjects:[],excludedProjects:[],syncEngines:['deepseek-harness']});
+    core.projects.readLocal = engine => localProjectDirectories(engine, {command:'dsh',env});
+    await core.projects.refresh();
+    assert.deepEqual(core.workspace(f.w.id).engines,['deepseek-harness']);
+    assert.match(core.projects.status.get('deepseek-harness')!,/本机项目/);
+  } finally { await f.close(); }
+});
 
 test('native directories across platforms keep their original sessions and separate creation authority', async () => {
   const f = await fixture();

@@ -11,7 +11,7 @@ export async function desktopCatalog(core: Core, input: Record<string,unknown>, 
     return {online,hostId:core.hostId,workspaces:workspaces.map(w=>({id:w.id,name:w.name,engines:w.engines})),items:core.store.list<Session>('session').filter(s=>ids.has(s.ref.workspaceId) && (ids.get(s.ref.workspaceId)?.engines?.includes(s.ref.engineId) ?? true)).map(catalogEntry)};
   }
   if (input.operation==='project-sync') {
-    if (online) await core.projects.refresh();
+    await core.projects.refresh();
     return { projects:core.projects.known(), status:Object.fromEntries(core.projects.status) };
   }
   if (input.operation==='browser-config') {

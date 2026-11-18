@@ -5,13 +5,27 @@ import { randomUUID } from 'node:crypto';
 import type { Core } from './core.ts';
 import { inside } from './files.ts';
 import { directoryIdentity } from './workspace-identity.ts';
-import type { EngineId, Workspace } from '../../../packages/protocol/src/types.ts';
+import { ENGINES, type EngineId, type Workspace } from '../../../packages/protocol/src/types.ts';
 
 export interface ProjectPolicy {
   syncEngines: EngineId[];
   creationRoot: string;
   manualProjects: string[];
   excludedProjects: string[];
+  keepLegacyCreationRoots?: true;
+}
+
+export function effectiveProjectPolicy(config: {
+  projectPolicy?: ProjectPolicy;
+  allowedWorkspaceRoots: string[];
+  runtimes: Partial<Record<EngineId, { enabled?: boolean; expectedVersion?: string }>>;
+}): ProjectPolicy | undefined {
+  if (config.projectPolicy || !config.allowedWorkspaceRoots?.length) return config.projectPolicy;
+  const syncEngines = ENGINES.filter(engine => {
+    const runtime = config.runtimes?.[engine];
+    return runtime && runtime.enabled !== false && runtime.expectedVersion !== 'DISABLED';
+  });
+  return { syncEngines, creationRoot: config.allowedWorkspaceRoots[0], manualProjects: [], excludedProjects: [], keepLegacyCreationRoots: true };
 }
 interface ProjectSource { path: string; engines: EngineId[]; created?: boolean }
 const sourceTable = 'workspace-origins-v1';
@@ -22,6 +36,7 @@ export class NativeProjects {
   readonly core: Core;
   policy?: ProjectPolicy;
   readonly status = new Map<EngineId, string>();
+  readLocal?: (engine: EngineId) => Promise<string[]>;
   private pending?: Promise<void>;
   private timer?: ReturnType<typeof setInterval>;
   private closed = false;
@@ -53,7 +68,7 @@ export class NativeProjects {
   index(workspace: Workspace) {
     if (this.policy) this.core.store.put('workspace-path-v1', pathKey(workspace.path), workspace.id);
   }
-  get creationRoots() { return this.policy ? [this.policy.creationRoot] : this.core.allowedRoots; }
+  get creationRoots() { return this.policy && !this.policy.keepLegacyCreationRoots ? [this.policy.creationRoot] : this.core.allowedRoots; }
   recordCreated(workspace: Workspace) {
     if (!this.policy) return;
     this.index(workspace);
@@ -72,7 +87,7 @@ export class NativeProjects {
     const key = pathKey(path);
     const known = byPath.get(key) || this.core.store.get<Workspace>('workspace', this.core.store.get<string>('workspace-path-v1',key) || '');
     const added = !!engine && !old.engines.includes(engine);
-    if (known && !added) return false;
+    if (!added && (known || this.excluded(path))) return false;
     this.core.store.transaction(() => {
       if (added) this.core.store.put(sourceTable, path, { ...old, engines: [...old.engines, engine] });
       if (this.excluded(path)) return;
@@ -98,10 +113,18 @@ export class NativeProjects {
     if (changed && !this.closed) this.core.emit('catalog.changed');
     await Promise.all(policy.syncEngines.map(async engine => {
       let engineChanged = false;
+      const paths = new Set<string>();
+      const local = await this.readLocal?.(engine).catch(() => []);
+      for (const path of local ?? []) {
+        if (this.closed || this.policy !== policy) return;
+        if (!isAbsolute(path)) continue;
+        paths.add(resolve(path));
+        try { if (await this.register(path, byPath, engine)) engineChanged = true; } catch { /* Offline or replaced directory. */ }
+      }
+      const localPaths = new Set(paths);
       try {
         const provider = this.core.external.providers.get(engine);
         if (!provider?.projectDirectories) throw new Error('此运行时暂不提供项目列表');
-        const paths = new Set<string>();
         const cursors = new Set<string>();
         let cursor: string | undefined;
         do {
@@ -114,6 +137,7 @@ export class NativeProjects {
         } while (cursor);
         for (const path of paths) {
           if (this.closed || this.policy !== policy) return;
+          if (localPaths.has(path)) continue;
           try { if (await this.register(path, byPath, engine)) engineChanged = true; } catch { /* Unavailable or replaced directories cannot be granted. */ }
         }
         if (this.closed || this.policy !== policy) return;
@@ -125,7 +149,10 @@ export class NativeProjects {
           }
         }
         this.status.set(engine, '已同步');
-      } catch (error) { this.status.set(engine, error instanceof Error ? error.message : '平台暂不可用'); }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : '平台暂不可用';
+        this.status.set(engine, localPaths.size ? '已读取本机项目记录。' + detail : detail);
+      }
       if (engineChanged && !this.closed) this.core.emit('catalog.changed');
     }));
   }

@@ -34,23 +34,23 @@
     },
     {
       "path": "apps/desktop/launchers/Start-Linux.sh",
-      "bytes": 266,
-      "sha256": "05bdb77abc514f34b734be20fa0b3dcdf0ab383765322d756fe8734226c40933"
+      "bytes": 271,
+      "sha256": "74ddef22f1a5368850b801489e7e649f96e023d0156fc7508f78cc53d5fd5cb3"
     },
     {
       "path": "apps/desktop/launchers/Start-macOS.command",
-      "bytes": 446,
-      "sha256": "36142dcc9a1c3acbca4511b76b80cc005f7ecb693978bb0f37303f00f2b1681a"
+      "bytes": 451,
+      "sha256": "67112aa2d7dc4d502f9e0f82ffb5a55046c9164d0a48a1c96710a9a68f11c99b"
     },
     {
       "path": "apps/desktop/launchers/Start-Windows.cmd",
-      "bytes": 311,
-      "sha256": "df1d1061d047958489788eb08ecadbf10b5a07c42a86a090648f42d91bf2dc8b"
+      "bytes": 314,
+      "sha256": "60e39f1495d5d248c05b7cefa14c920d51f6623830a25562546e2a230dc3c5f5"
     },
     {
       "path": "apps/desktop/public/app.js",
-      "bytes": 26421,
-      "sha256": "ed728171236edced4f4dbd3cfef89ca58d4aa72781daf9432e8e12b1dba3bfa9"
+      "bytes": 26406,
+      "sha256": "ae44206fc6bd8982de61dc17d80a2f14d3345f3cb9fa9809fb7396e3a7afcd8f"
     },
     {
       "path": "apps/desktop/public/index.html",
@@ -88,9 +88,24 @@
       "sha256": "48c6bc7c69c98ebba6ffd4431da783a8ce2765f3f0ab3879d60a6b5a8875180d"
     },
     {
+      "path": "apps/desktop/src/instance-owner.ts",
+      "bytes": 3891,
+      "sha256": "d8de7ddebf93aad5611909cd47e204ee351d0c621f03cb7bf8227ad815611032"
+    },
+    {
+      "path": "apps/desktop/src/instance-prompt.ts",
+      "bytes": 3499,
+      "sha256": "e842c761fd5266eda0cc7c284fb19057f58eea4da597492582917b8a8cca1fb2"
+    },
+    {
+      "path": "apps/desktop/src/instance.ts",
+      "bytes": 6704,
+      "sha256": "084d682f5f199b3577688d2c7008dee9cf9849cccb79193fed93330d287e1247"
+    },
+    {
       "path": "apps/desktop/src/main.ts",
-      "bytes": 2523,
-      "sha256": "60988a01d8a4a3e2ea490e8e4e75769300e9b9290d12a539b57e8eca1cded0b8"
+      "bytes": 2780,
+      "sha256": "f32aee620cb5a69c7f17a3eacda4142430faa28d29420bf1d8d6789928e07680"
     },
     {
       "path": "apps/desktop/src/runtime.ts",
@@ -99,8 +114,8 @@
     },
     {
       "path": "apps/desktop/src/service.ts",
-      "bytes": 17469,
-      "sha256": "1f4760896eb1b5ba62aa9c41900801ee3dc6d5a64aa23e616281513dd828a06a"
+      "bytes": 18968,
+      "sha256": "451fbdd2497ad530ae38edfb102a82b6a66d1f902852da7c001f571449135419"
     },
     {
       "path": "apps/desktop/tsconfig.json",
@@ -139,8 +154,8 @@
     },
     {
       "path": "apps/gateway/src/desktop-catalog.ts",
-      "bytes": 4114,
-      "sha256": "299de0a34fbf26bddf784fbf75c193ab0e3a05b6b92691ca6ddcd86c34442995"
+      "bytes": 4102,
+      "sha256": "5e3fccabea349f2f0653865e9969bca4f8f9e6b907a54a01a32dee36e4ae7c12"
     },
     {
       "path": "apps/gateway/src/external-sync.ts",
@@ -163,9 +178,14 @@
       "sha256": "88b1d884ac8f3299e20b619e5fbcf098841b1dc196ec4a0262ea56ead3265315"
     },
     {
+      "path": "apps/gateway/src/local-project-catalog.ts",
+      "bytes": 3859,
+      "sha256": "9200082862ba29793e8413bfd5107e74cb4e0b774f530b7e80b663a09263b838"
+    },
+    {
       "path": "apps/gateway/src/main.ts",
-      "bytes": 9683,
-      "sha256": "46860f235215a93c38f278c8a6edfa99b26b799d834851a6b8a9b3ee54f46c21"
+      "bytes": 9878,
+      "sha256": "bb8ec44dfa6eb2579433726552b5256c913ca2effa43ed076ef05347db616aa6"
     },
     {
       "path": "apps/gateway/src/media.ts",
@@ -174,8 +194,8 @@
     },
     {
       "path": "apps/gateway/src/native-projects.ts",
-      "bytes": 7402,
-      "sha256": "d72e318780cfdf87bad7dee87facdc89f00f91cba236bacc87ba70b0ba41ea9b"
+      "bytes": 8821,
+      "sha256": "e20ec849869c6ea8a72f4fb01bb2e123124d77e3732cf7616314a12576ff5cdd"
     },
     {
       "path": "apps/gateway/src/pair-cli.ts",
@@ -259,13 +279,13 @@
     },
     {
       "path": "docs/DESKTOP_GUIDE.md",
-      "bytes": 10728,
-      "sha256": "869479418f64128cda9b77d80b95d8367f16a7dd26d5ebfe135afd79416c5f63"
+      "bytes": 11642,
+      "sha256": "0a55aa67981f029115b32a7c33ee125d7a4c9bf071fc6b461168e03e8f28f1cb"
     },
     {
       "path": "docs/DESKTOP_RELEASE.md",
-      "bytes": 1488,
-      "sha256": "6a1593ceff5a28079b1540eb6a8c2c0eed1543ac7eeb2b49d112c3c8a44257e9"
+      "bytes": 1261,
+      "sha256": "e14b7438991599101a22119fee8581fd166df17b8f2f90eb7a1ef9677dce577d"
     },
     {
       "path": "docs/DESKTOP_VALIDATION.md",
@@ -320,12 +340,12 @@
     {
       "path": "package-lock.json",
       "bytes": 17007,
-      "sha256": "9cd9551fea549a21fa133c65a3492690411c61789bbb6ee03811bf20044150b7"
+      "sha256": "abb740b28a2b7b7c4f5a3e081dd60342d6e17e463f44583e6d35ff5b05c7b7b5"
     },
     {
       "path": "package.json",
       "bytes": 1102,
-      "sha256": "a1e6557e54973629746a74bacfdf2649d03a74915ae0452a323b77120a9461ee"
+      "sha256": "13990ddcdcbb4fd26bb2c06459020095551ec5b680f6508a778bbbf9e732cad5"
     },
     {
       "path": "packages/adapters/claude-code/external.ts",
@@ -509,8 +529,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 3532,
-      "sha256": "cb6a291a48c5abc34babbea3de8150807d78af7c93638db6d8333f49a6748b22"
+      "bytes": 3747,
+      "sha256": "eef3d21bee86d14df7e178837426ade6bcf57fe6045b2cee9308c9ec78e1898b"
     },
     {
       "path": "scripts/check-offline-readiness.mjs",
@@ -529,8 +549,8 @@
     },
     {
       "path": "scripts/package-desktop.mjs",
-      "bytes": 11496,
-      "sha256": "95bebecd28adcd6a154e168a13aac220f13b4776bf4cb79a7cbf433225b1e99f"
+      "bytes": 11604,
+      "sha256": "6537da5921ff85656adffa6f2a7534cdcb707407307d75eac1fc7b11a8e1ce46"
     },
     {
       "path": "start.mjs",
@@ -744,8 +764,13 @@
     },
     {
       "path": "tests/desktop/desktop.test.ts",
-      "bytes": 13936,
-      "sha256": "c06c28e4a1c47960eaf539c41fcebe5c63c0ec4953143a0c9e37185a66c3eda6"
+      "bytes": 14385,
+      "sha256": "3216d42e0a311f504983648dacce5ac3225c29cf472927405b300d40c35c5bf5"
+    },
+    {
+      "path": "tests/desktop/instance.test.ts",
+      "bytes": 5363,
+      "sha256": "668f817e016ec0ba1647988d7cd3643059fd6d1ae1a16e748ee5f9d9ff510b8b"
     },
     {
       "path": "tests/desktop/packaging.test.ts",
@@ -854,8 +879,8 @@
     },
     {
       "path": "tests/gateway/native-projects.test.ts",
-      "bytes": 5246,
-      "sha256": "2f95d83e001da01ee248d7a03f5a5edfb3e5717ea836d16bc250751a48291b15"
+      "bytes": 9139,
+      "sha256": "61fae53990185a357743c9ea43dc8c80c7ea1ad4585e5fd877d2f346fb9d890e"
     },
     {
       "path": "tests/gateway/protocol-v2.test.ts",

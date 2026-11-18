@@ -29,7 +29,8 @@ import { RuntimeManager } from '../../desktop/src/runtime.ts';
 import { desktopCatalog } from './desktop-catalog.ts';
 import { RuntimeRecovery } from './runtime-recovery.ts';
 import { RuntimeUpdateMonitor, type RuntimeUpdateConfig } from './runtime-updates.ts';
-import type { ProjectPolicy } from './native-projects.ts';
+import { localProjectDirectories } from './local-project-catalog.ts';
+import { effectiveProjectPolicy, type ProjectPolicy } from './native-projects.ts';
 export interface HostConfig { projectPolicy?:ProjectPolicy; hostId:string;name:string;os:string;listen:string;port:number;publicEndpoint:string;dataDir:string;caFile:string;certFile:string;keyFile:string;allowedWorkspaceRoots:string[];runtimes:Record<EngineId,RuntimeConfig>;automation?:AutomationConfig;push?:HuaweiPushConfig;runtimeUpdates?:RuntimeUpdateConfig }
 const configPath=process.argv[2]||'host.config.json';
 const c=JSON.parse(await readFile(configPath,'utf8')) as HostConfig;
@@ -41,7 +42,8 @@ try { const old=JSON.parse(await readFile(lockPath,'utf8'));let running=true;try
 const lock=await open(lockPath,'wx',0o600);await lock.writeFile(JSON.stringify({pid:process.pid}));await lock.close();
 await mkdir(c.dataDir,{recursive:true,mode:0o700});
 const store=new Store(join(c.dataDir,'console.sqlite'));store.recover();
-const core=new Core(store,c.hostId,await Promise.all(c.allowedWorkspaceRoots.map(canonical)),c.projectPolicy);
+const core=new Core(store,c.hostId,await Promise.all(c.allowedWorkspaceRoots.map(canonical)),effectiveProjectPolicy(c));
+core.projects.readLocal = engine => localProjectDirectories(engine, c.runtimes[engine]);
 if(c.runtimes.codex.enabled!==false){
   try{const registered=await new RuntimeManager(c.dataDir).connect('codex',c.runtimes.codex);c.runtimes.codex={...c.runtimes.codex,endpoint:registered.endpoint,runtimeIdentity:registered.identity,registeredVersion:registered.version};}
   catch(error){c.runtimes.codex={...c.runtimes.codex,runtimeIdentity:undefined,registeredVersion:undefined};console.error('Codex 共享运行时未连接：',(error as Error).message);}

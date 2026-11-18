@@ -68,7 +68,7 @@ function buildRuntimes() {
     row.querySelector('label span').textContent = name;
     const enabled = row.querySelector('input[type=checkbox]'); enabled.checked = config ? config.enabled !== false && config.expectedVersion !== 'DISABLED' : id === 'codex';
     const syncLabel = document.createElement('label'), sync = document.createElement('input');
-    sync.type='checkbox'; sync.id='sync-'+id; sync.checked=state.config ? !!state.config.projectPolicy?.syncEngines.includes(id) : true;
+    sync.type='checkbox'; sync.id='sync-'+id; sync.checked=state.config?.projectPolicy?.syncEngines.includes(id) ?? true;
     syncLabel.append(sync,document.createTextNode('同步已有项目到手机')); row.querySelector('.runtime-body').prepend(syncLabel);
     const input = row.querySelector('input:not([type=checkbox])'); input.value = config?.command || commandDefaults[id];
     if (docs[id]) { const link = document.createElement('a'); link.href = docs[id]; link.textContent = '安装与登录说明'; link.target = '_blank'; link.rel = 'noreferrer'; row.querySelector('.runtime-heading').append(link); }

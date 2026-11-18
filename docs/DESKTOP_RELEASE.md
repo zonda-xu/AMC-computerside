@@ -1,13 +1,13 @@
-# AMC 电脑连接助手 v1.0.1
+# AMC 电脑连接助手 v1.0.2
 
-Windows、macOS 和 Linux 网关现按本机 AI 程序提供的原生接口判断兼容性。旧配置中的版本记录可以继续使用，只有显式选择 `compatibilityMode: "pinned"` 才会锁定版本。
+Windows、macOS 和 Linux 现在会在启动时检查已有连接助手，包括 v1.0.1。发现旧助手时，启动器会让你选择。
 
-- Codex 通过共享 app-server 握手，分别检测会话历史、模型目录和控制接口。支持从授权项目打开原会话继续点单，也可以另建会话。本机已用 Windows CLI 0.167.1 和 0.145.0 验证这些操作，测试回复由本机模型模拟服务提供。
-- Claude Code 和 OpenCode 改为检查官方 SDK 或会话服务所需的接口。DeepSeek Harness 继续按同宿主控制器的能力接入。
-- 连接助手会指出被占用的端口或失效的本机 IP。启用 DeepSeek Harness 时才启动 8898 桥接监听。
+- **关闭旧助手并启动**。当前版本等待旧助手退出，再使用原来的配置、证书、配对记录和会话库。原先运行中的手机网关会尝试恢复，切换期间手机可能短暂断线。
+- **退出本次启动**。旧助手和手机网关继续工作。Windows 弹窗中“是”表示切换，“否”表示退出本次启动。终端模式下按 Enter 也会保留旧助手。
+- **项目目录**。从 v1.0.1 升级会自动读取已启用平台的本机项目记录，并沿用原有的新建目录权限。原生服务连接后还会补充项目和历史会话。你可以逐平台关闭同步，也可通过系统文件夹选择器手动添加。新项目的保存位置单独设置。
 
-## 下载与升级
+## 下载与启动
 
-1. 下载与你的系统对应的 Windows、macOS 或 Linux ZIP。可用同一发布页的 `SHA256SUMS.txt` 核对下载文件。
-2. 在旧助手中停止网关并退出。将新包完整解压到新目录，保留原来的配置和 `~/.ai-maid-cafe/desktop` 数据目录，以便沿用主机身份、配对记录和会话。
-3. Windows 运行 `Start-Windows.cmd`，macOS 运行 `Start-macOS.command`，Linux 运行 `./Start-Linux.sh`。启动器会打开新的本机管理地址。首次使用请在助手中保存本机地址、授权项目和 AI 平台，再启动网关。三端均需要 Node.js 24.13 或更高的 24.x 版本、OpenSSL 和所用 AI 程序。
+下载对应系统的 ZIP 并完整解压到新目录。Windows 双击 `Start-Windows.cmd`，macOS 打开 `Start-macOS.command`，Linux 运行 `./Start-Linux.sh`。在终端给启动命令加上 `--terminal-prompt` 可以用键盘选择。
+
+使用 Node.js 24.13 或更高的 24.x 版本与 OpenSSL。校验值见同页的 `SHA256SUMS.txt`。

@@ -9,5 +9,5 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-node launch.mjs
+node launch.mjs %*
 if errorlevel 1 pause

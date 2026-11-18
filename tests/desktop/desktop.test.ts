@@ -81,16 +81,26 @@ test('desktop admin rejects unauthenticated, cross-origin and forged Host reques
 
 test('standalone host preserves identity, runs real TLS pairing, invalidates refreshes and revokes live devices', { timeout: 120000 }, async () => {
   const available = addresses(); assert.ok(available.length, 'Integration test needs a local private IPv4 interface');
+  let address = '';
+  for (const candidate of available) {
+    const probe = createTcpServer();
+    const free = await new Promise<boolean>(done => {
+      probe.once('error', () => done(false));
+      probe.listen(8899, candidate.address, () => probe.close(() => done(true)));
+    });
+    if (free) { address = candidate.address; break; }
+  }
+  assert.ok(address, 'Integration test needs a free private interface on port 8899');
   const fixture = await temporary(), root = join(fixture.root, 'private'), workspace = join(fixture.root, 'project'); await mkdir(workspace);
   const oldLockDir = process.env.AMC_STATE_DIR; process.env.AMC_STATE_DIR = join(fixture.root, 'locks');
   const service = new DesktopService(root); const sockets: WebSocket[] = [];
   const occupiedBridge = createTcpServer();
   try {
     // Node is only a version-output fixture; this test never claims a real AI task succeeded.
-    const input: SetupInput = { name: 'Desktop integration fixture', mode: 'lan', address: available[0].address, workspace, runtimes: { codex: { command: process.execPath, enabled: true } } };
+    const input: SetupInput = { name: 'Desktop integration fixture', mode: 'lan', address, workspace, runtimes: { codex: { command: process.execPath, enabled: true } } };
     const first = await saveHost(root, input); const firstCA = await readFile(first.caFile, 'utf8');
     assert.equal(first.runtimes.codex.expectedVersion, process.version); assert.equal(first.runtimes.opencode.enabled, false);
-    first.runtimes.codex.env = { AMC_PRIVATE_TEST: 'do-not-expose-native-credentials' };
+    first.runtimes.codex.env = { AMC_PRIVATE_TEST: 'do-not-expose-native-credentials', CODEX_HOME: join(root, 'fixture-codex') };
     first.runtimes['claude-code'].executablePath = join(root, 'local-claude');
     first.runtimes.opencode.serviceRegistrationFile = join(root, 'native-opencode-registration.json');
     first.push = { serviceAccountFile: join(root, 'push-account.json'), category: 'WORK', testMessage: true };
