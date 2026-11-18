@@ -18,7 +18,7 @@ export default async function activate(ctx, config = {}) {
   const home = await realpath(process.env.DSH_HOME || join(homedir(),'.dsh')).catch(()=>undefined);
   const historyNamespace = home ? 'dsh-store:'+createHash('sha256').update(home).digest('hex') : undefined;
   const observed = new Set();
-  const handlers = externalHandlers(ctl, observed, instanceId);
+  const handlers = externalHandlers(ctl, observed, instanceId, ctx);
   let ws; let retry; let stopped = false; let delay = 250;
   const bridge=evidence.apiProfile?controllerBridge(ctx,ctl,instanceId,message=>{if(ws?.readyState===WebSocket.OPEN)ws.send(JSON.stringify(message));}):undefined;
   const dispose = ctx.on('session/event', (session) => {

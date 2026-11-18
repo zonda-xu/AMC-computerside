@@ -5,6 +5,7 @@ export interface DiscoveryPage { items: NativeCandidate[]; cursor?: string }
 export interface ExternalSessionProvider {
   engineId: EngineId;
   profile(): Promise<ExternalProfile>;
+  projectDirectories?(cursor?: string): Promise<{ paths: string[]; cursor?: string }>;
   discover(cwd: string, cursor?: string): Promise<DiscoveryPage>;
   history(cwd: string, nativeId: string, cursor?: string): Promise<ExternalPage>;
 }

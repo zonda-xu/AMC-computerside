@@ -33,23 +33,35 @@ export class WorkspaceCreator {
   status(device: string, requestId: string) {
     const op = this.core.store.get<Operation>('workspace-create-v1', stable([device, requestId]));
     requireValue(op, 'operation_missing', 'Directory creation operation not found', 404);
-    requireValue(this.core.allowedRoots.includes(op.root), 'root_not_granted', 'Root authorization was revoked', 403);
+    requireValue(this.core.projects.creationRoots.includes(op.root), 'root_not_granted', 'Root authorization was revoked', 403);
     return { stage: op.stage, detail: op.detail || '', workspaceId: op.workspaceId };
   }
+  private async parentIdentity(root: string) {
+    const current = await identity(root);
+    if (this.core.projects.policy) {
+      const saved = this.core.store.get<Identity>('project-creation-parent-v1',root);
+      if (saved) requireValue(same(saved,current),'root_changed','New project location was replaced',409);
+      else this.core.store.put('project-creation-parent-v1',root,current);
+    }
+    return current;
+  }
+  private conflicts(existing: string, target: string) {
+    return this.core.projects.policy ? inside(target,existing) : overlaps(existing,target);
+  }
   async roots() {
-    return Promise.all(this.core.allowedRoots.map(async root => {
+    return Promise.all(this.core.projects.creationRoots.map(async root => {
       let reason = '';
       try {
         requireValue(await canonical(root) === root, 'root_changed', 'Authorized root identity changed');
-        await identity(root);
-        if (this.core.store.list<Workspace>('workspace').some(w => w.writeRoots.some(p => inside(p, root)))) reason = 'An existing parent workspace covers this root';
+        await this.parentIdentity(root);
+        if (!this.core.projects.policy && this.core.store.list<Workspace>('workspace').some(w => w.writeRoots.some(p => inside(p, root)))) reason = 'An existing parent workspace covers this root';
       } catch { reason = 'Authorized root is unavailable or changed'; }
-      return { rootId: this.rootId(root), name: basename(root), canCreate: !reason, reason };
+      return { rootId: this.rootId(root), name: basename(root) || root, canCreate: !reason, reason };
     }));
   }
   async create(device: string, requestId: string, rootId: string, leaf: string, name: string): Promise<Workspace> {
     directoryName(leaf);
-    const root = this.core.allowedRoots.find(p => this.rootId(p) === rootId);
+    const root = this.core.projects.creationRoots.find(p => this.rootId(p) === rootId);
     requireValue(root, 'root_not_granted', 'Unknown authorized root', 403);
     const previous = this.tails.get(root) || Promise.resolve();
     let release: () => void = () => {};
@@ -60,6 +72,7 @@ export class WorkspaceCreator {
     finally { release(); if (this.tails.get(root) === tail) this.tails.delete(root); }
   }
   private async perform(device: string, requestId: string, root: string, leaf: string, name: string): Promise<Workspace> {
+    requireValue(this.core.projects.creationRoots.includes(root), 'root_not_granted', 'Creation location changed', 403);
     const key = stable([device, requestId]);
     const hash = digest(stable({ root, leaf, name }));
     let op = this.core.store.get<Operation>('workspace-create-v1', key);
@@ -70,9 +83,9 @@ export class WorkspaceCreator {
       requireValue(op.stage === 'created', op.stage === 'failed' ? 'creation_failed' : 'needs_review', op.detail || 'Directory ownership cannot be proven; host review required', 409);
     } else {
       requireValue(await canonical(root) === root, 'root_changed', 'Authorized root changed', 409);
-      const parent = await identity(root);
+      const parent = await this.parentIdentity(root);
       const target = join(root, leaf);
-      for (const w of this.core.store.list<Workspace>('workspace')) requireValue(!w.writeRoots.some(p => overlaps(p, target)), 'overlapping_project', 'Managed project roots overlap', 409);
+      for (const w of this.core.store.list<Workspace>('workspace')) requireValue(!w.writeRoots.some(p => this.conflicts(p, target)), 'overlapping_project', 'Managed project roots overlap', 409);
       op = { hash, root, target, name, parent, stage: 'prepared' };
       this.core.store.put('workspace-create-v1', key, op);
       try { await mkdir(target, { mode: 0o700 }); }
@@ -83,10 +96,11 @@ export class WorkspaceCreator {
       } catch (e) { op.stage = 'needs_review'; this.core.store.put('workspace-create-v1', key, op); throw e; }
     }
     requireValue(op.child && same(op.parent, await identity(root)) && same(op.child, await identity(op.target)) && await realpath(op.target) === op.target && await realpath(root) === root, 'needs_review', 'Created directory identity changed; host review required', 409);
-    for (const w of this.core.store.list<Workspace>('workspace')) requireValue(!w.writeRoots.some(p => overlaps(p, op.target)), 'overlapping_project', 'Managed project roots overlap', 409);
+    for (const w of this.core.store.list<Workspace>('workspace')) requireValue(!w.writeRoots.some(p => this.conflicts(p, op.target)), 'overlapping_project', 'Managed project roots overlap', 409);
+    requireValue(this.core.projects.creationRoots.includes(root), 'root_not_granted', 'Creation location changed', 403);
     const w: Workspace = { id: randomUUID(), hostId: this.core.hostId, name, path: op.target, writeRoots: [op.target] };
     op.stage = 'done'; op.workspaceId = w.id;
-    this.core.store.transaction(() => { this.core.store.put('workspace', w.id, w); this.core.store.put('workspace-create-v1', key, op); });
+    this.core.store.transaction(() => { this.core.projects.recordCreated(w); this.core.store.put('workspace', w.id, w); this.core.store.put('workspace-create-v1', key, op); });
     this.core.emit('catalog.changed');
     return w;
   }

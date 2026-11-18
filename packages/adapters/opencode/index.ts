@@ -30,6 +30,7 @@ export class OpenCodeAdapter extends AdapterBase implements AgentAdapter {
     if(changed&&this.byNative.size)throw new Error('OpenCode registered service identity changed; explicit runtime reconciliation required');
     for(const id of this.byNative.values()){const binding=this.context.getSession(id).binding;if(binding?.nativeIdentity&&binding.nativeIdentity!==identity)throw new Error('OpenCode registered service differs from persisted session binding');}
     if(changed){this.pending.clear();this.blocks.clear();this.seen.clear();this.finalMessages.clear();this.endedBlocks.clear();this.inputIds.clear();this.submittedInputs.clear();this.activeSnapshots.clear();}this.endpoint=endpoint;this.closed=false;this.epoch=this.context.openConnection(undefined,identity);await this.openStream();}
+  projectListRoute = '/api/project';
   async http(path:string,method='GET',body?:Native):Promise<Native>{if(!this.endpoint)throw new Error('OpenCode service not discovered');const headers=new Headers(this.endpoint.headers);if(body)headers.set('content-type','application/json');const response=await fetch(new URL(path,this.endpoint.url),{method,headers,body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(30000)});if(!response.ok)throw new Error(`OpenCode ${method} ${path}: HTTP ${response.status}`);return response.status===204?{}:await response.json() as Native;}
   path(nativeId:string,suffix=''){return `/api/session/${encodeURIComponent(nativeId)}${suffix}`;}
   async openStream(){

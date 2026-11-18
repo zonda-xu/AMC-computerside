@@ -14,7 +14,7 @@ export interface RuntimeBinding {
 export interface RunRecord { runId: string; sessionId: string; generation: number; clientRequestId?: string; deviceId?: string; nativeRunId?: string; nativeRequestId?: string; nativeStartedAt?:number; state: RunState; result?: Record<string, unknown> }
 export interface SessionRef { hostId: string; workspaceId: string; runtimeInstanceId: string; engineId: EngineId; nativeSessionId: string }
 export interface ModelIdentity { providerId: string; modelId: string; label: string; reasoningEffort?:string; catalogSource?:string; parameterCount?:number; parameterSource?:string }
-export interface Workspace { id: string; hostId: string; name: string; path: string; writeRoots: string[] }
+export interface Workspace { id: string; hostId: string; name: string; path: string; writeRoots: string[]; engines?: EngineId[] }
 export interface WorkspaceCreateRequest { clientRequestId: string; rootId: string; directoryName: string; name: string }
 export interface ExternalSource { namespace: string; nativeId: string; generation: string; profile: string; readOnly: boolean }
 export interface ExternalCapability { state: 'supported' | 'unsupported' | 'unverified'; reason: string }

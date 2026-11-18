@@ -22,6 +22,30 @@ export class OpenCodeExternalProvider implements ExternalSessionProvider {
     p.observe = { state: 'supported', reason: 'Manual persisted history refresh; runtime control requires explicit attachment' };
     return p;
   }
+  async projectDirectories(cursor?: string) {
+    await this.adapter.connection();
+    const paths = new Set<string>();
+    if (!cursor && this.adapter.projectListRoute) {
+      try {
+        const result = await this.adapter.http(this.adapter.projectListRoute);
+        const projects = Array.isArray(result) ? result : result.data;
+        requireValue(Array.isArray(projects), 'external_format', 'OpenCode 项目列表格式无效');
+        for (const p of projects) {
+          for (const path of [p.canonical, p.worktree, p.directory, ...(Array.isArray(p.sandboxes) ? p.sandboxes : [])]) {
+            if (typeof path === 'string' && path) paths.add(path);
+          }
+        }
+      } catch (error) {
+        if (!/HTTP (404|405|501)$/.test(String(error))) throw error;
+      }
+    }
+    const query = new URLSearchParams({ limit:'100' });
+    if (cursor) query.set('cursor',cursor);
+    const page = await this.adapter.http('/api/session?' + query);
+    requireValue(Array.isArray(page.data) && page.data.length <= 100 && (page.cursor?.next == null || typeof page.cursor.next === 'string'), 'external_format', 'OpenCode 会话目录列表格式无效');
+    for (const row of page.data) if (typeof row.location?.directory === 'string') paths.add(row.location.directory);
+    return { paths: [...paths], cursor: page.cursor?.next || undefined };
+  }
   async discover(cwd: string, cursor?: string): Promise<DiscoveryPage> {
     requireValue((await this.profile()).discover.state === 'supported', 'external_unverified', 'OpenCode registered service is unavailable', 409);
     const query = new URLSearchParams({ directory: cwd, limit: '50' });

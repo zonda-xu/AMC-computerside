@@ -39,14 +39,14 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       }
       const browser = path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/browser-link$/);
       if (browser && req.method==='POST') {
-        const s=core.session(browser[1]); core.workspace(s.ref.workspaceId);
+        const s=core.session(browser[1]); core.workspace(s.ref.workspaceId,s.ref.engineId);
         const input=await jsonBody(req,8192); const link=string(input.url,'url',4096);
         requireValue(s.messages.some(m=>m.role==='assistant' && m.id===input.messageId && m.text.includes(link)), 'unknown_link','链接不属于该条会话消息',400);
         const launch = core.store.get<{path:string}>('host-preference','cage-browser')?.path || process.env.AMC_CAGE_LAUNCH_FILE;
         reply(await cageBrowser.open(launch,await validatePublicLink(link))); return;
       }
       const artifactsPath=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/artifacts$/);
-      if(artifactsPath&&req.method==='GET'){const session=core.session(artifactsPath[1]);const workspace=core.workspace(session.ref.workspaceId);reply({sessionId:session.id,runId:session.runId,items:await sessionArtifacts(session,workspace)});return;}
+      if(artifactsPath&&req.method==='GET'){const session=core.session(artifactsPath[1]);const workspace=core.workspace(session.ref.workspaceId,session.ref.engineId);reply({sessionId:session.id,runId:session.runId,items:await sessionArtifacts(session,workspace)});return;}
       const media = path.match(/^\/v2\/workspaces\/([A-Za-z0-9-]+)\/media$/);
       if (media && req.method === 'GET') {
         reply(await readMedia(core.workspace(media[1]),url.searchParams.get('path')||'',Number(url.searchParams.get('offset')||0),url.searchParams.get('revision')||undefined)); return;
@@ -55,7 +55,7 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       if(previewPath&&req.method==='GET'){reply(await previewProject(core.workspace(previewPath[1]),url.searchParams.get('path')||''));return;}
       const modelsPath=path.match(/^\/v2\/workspaces\/([A-Za-z0-9-]+)\/models$/);
       if(modelsPath&&req.method==='GET'){
-        const workspace=core.workspace(modelsPath[1]);const engineId=url.searchParams.get('engineId') as EngineId;
+        const engineId=url.searchParams.get('engineId') as EngineId;const workspace=core.workspace(modelsPath[1],engineId);
         const adapter=core.adapters.get(engineId);requireValue(adapter,'runtime_missing','Platform is not configured',404);
         const descriptor=await adapter.probe();
         reply({runtimeInstanceId:descriptor.runtimeInstanceId,workspaceId:workspace.id,engineId,models:adapter.listModels?await adapter.listModels(workspace):descriptor.models});return;
@@ -81,11 +81,11 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       const observation=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/observation$/);
       if(observation&&req.method==='POST'){const p=await jsonBody(req,4096);reply(await core.external.sync(observation[1],p.cursor===undefined?undefined:string(p.cursor,'cursor',4096)));return;}
       const handoff=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/(handoffs|control-leases)$/);
-      if(handoff&&req.method==='POST'){const session=core.session(handoff[1]);core.workspace(session.ref.workspaceId);requireValue(session.externalSource,'source_missing','Not an external source',409);throw new Fault(409,'handoff_unverified','No verified original-writer termination, child termination or exclusive host-control evidence. Create a separate gateway-managed session; external continuation and leases remain disabled.');}
+      if(handoff&&req.method==='POST'){const session=core.session(handoff[1]);core.workspace(session.ref.workspaceId,session.ref.engineId);requireValue(session.externalSource,'source_missing','Not an external source',409);throw new Fault(409,'handoff_unverified','No verified original-writer termination, child termination or exclusive host-control evidence. Create a separate gateway-managed session; external continuation and leases remain disabled.');}
       if(path==='/v2/bootstrap'&&req.method==='GET'){
-        const workspaces=core.store.list<Workspace>('workspace').filter(w=>{try{core.workspace(w.id);return true;}catch{return false;}});
-        const authorized=new Set(workspaces.map(w=>w.id));
-        reply({...about,workspaces,sessions:core.store.list<Session>('session').filter(s=>authorized.has(s.ref.workspaceId)).map(s=>({...s,messages:[],tools:[],agents:[],interactions:s.interactions.filter(i=>i.status==='pending'||i.status==='responding')})),runtimes:await Promise.all([...core.adapters.values()].map(a=>a.probe())),runtimeUpdates:core.runtimeUpdates?.status(),devices:core.store.devices()});return;
+        const workspaces=core.visibleWorkspaces();
+        const authorized=new Map(workspaces.map(w=>[w.id,w]));
+        reply({...about,nativeProjectCatalog:!!core.projects.policy,workspaces,sessions:core.store.list<Session>('session').filter(s=>authorized.has(s.ref.workspaceId) && (authorized.get(s.ref.workspaceId)?.engines?.includes(s.ref.engineId) ?? true)).map(s=>({...s,messages:[],tools:[],agents:[],interactions:s.interactions.filter(i=>i.status==='pending'||i.status==='responding')})),runtimes:await Promise.all([...core.adapters.values()].map(a=>a.probe())),runtimeUpdates:core.runtimeUpdates?.status(),devices:core.store.devices()});return;
       }
       if(path==='/v2/workspaces'&&req.method==='POST'){const p=await jsonBody(req,32_768);reply(await core.registerWorkspace(string(p.path,'path',4096),string(p.name,'name',100)));return;}
       if(path==='/v2/sessions'&&req.method==='POST'){const p=await jsonBody(req,32_768);requireValue(p.protocolVersion===2&&p.hostId===core.hostId,'target_mismatch','Creation requires protocol 2 and matching host',409);reply(await core.createSession(device,string(p.clientRequestId,'clientRequestId'),string(p.workspaceId,'workspaceId'),p.engineId as EngineId,p.model as ModelIdentity|undefined,string(p.runtimeInstanceId,'runtimeInstanceId')));return;}
@@ -94,10 +94,10 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       const attachment=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/attach$/);
       if(attachment&&req.method==='POST'){reply(snapshotWindow(await core.attachExisting(device,attachment[1],await jsonBody(req,8192))));return;}
       const nativeCommands=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/native-commands$/);
-      if(nativeCommands&&req.method==='GET'){const session=core.session(nativeCommands[1]);core.workspace(session.ref.workspaceId);const adapter=core.adapters.get(session.ref.engineId);requireValue(session.binding?.state==='attached'&&session.binding.capabilities.slash&&adapter?.listNativeCommands,'capability_unavailable','Native commands unavailable',409);reply(await adapter.listNativeCommands(session));return;}
-      const detail=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)$/);if(detail&&req.method==='GET'){const session=core.session(detail[1]);core.workspace(session.ref.workspaceId);reply(snapshotWindow(session));return;}
+      if(nativeCommands&&req.method==='GET'){const session=core.session(nativeCommands[1]);core.workspace(session.ref.workspaceId,session.ref.engineId);const adapter=core.adapters.get(session.ref.engineId);requireValue(session.binding?.state==='attached'&&session.binding.capabilities.slash&&adapter?.listNativeCommands,'capability_unavailable','Native commands unavailable',409);reply(await adapter.listNativeCommands(session));return;}
+      const detail=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)$/);if(detail&&req.method==='GET'){const session=core.session(detail[1]);core.workspace(session.ref.workspaceId,session.ref.engineId);reply(snapshotWindow(session));return;}
       const s=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/(snapshot|events|history|messages|reconcile)$/);
-      if(s){const session=core.session(s[1]);core.workspace(session.ref.workspaceId);
+      if(s){const session=core.session(s[1]);core.workspace(session.ref.workspaceId,session.ref.engineId);
         if(s[2]==='snapshot'&&req.method==='GET'){reply(snapshotWindow(session));return;}
         if(s[2]==='reconcile'&&req.method==='POST'){await core.reconcile(session.id);reply(snapshotWindow(core.session(session.id)));return;}
         if(s[2]==='messages'&&req.method==='GET'){const before=Number(url.searchParams.get('before')||session.watermark+1);requireValue(Number.isSafeInteger(before)&&before>0,'cursor_invalid','Invalid cursor');const all=session.messages.filter(m=>(m.startSeq||1)<before);const messages=all.slice(-100);reply({messages,hasMore:all.length>100,beforeSeq:messages[0]?.startSeq||1});return;}
@@ -125,7 +125,7 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       const m=JSON.parse(raw.toString());requireValue(m.protocolVersion===2&&m.type==='subscribe'&&m.hostId===core.hostId&&Array.isArray(m.sessionIds)&&m.sessionIds.length<=1000,'subscribe_invalid','Invalid subscription');
       const p=peers.get(ws)!;const sessions=m.sessionIds.map((id:string)=>core.session(id));
       const cursors=m.afterSeq===undefined?undefined:object(m.afterSeq);
-      for(const s of sessions){core.workspace(s.ref.workspaceId);if(cursors)requireValue(Number.isSafeInteger(cursors[s.id])&&(cursors[s.id] as number)>=0&&(cursors[s.id] as number)<=s.watermark,'cursor_invalid','Invalid session replay cursor');}
+      for(const s of sessions){core.workspace(s.ref.workspaceId,s.ref.engineId);if(cursors)requireValue(Number.isSafeInteger(cursors[s.id])&&(cursors[s.id] as number)>=0&&(cursors[s.id] as number)<=s.watermark,'cursor_invalid','Invalid session replay cursor');}
       p.sessions=new Set(sessions.map((s:Session)=>s.id));
       for(const s of sessions){
         // A discovery ref and its verified writer have different runtime identities.
@@ -141,7 +141,7 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
     ws.on('close',()=>peers.delete(ws));ws.on('error',()=>peers.delete(ws));
   });
   const onEvent=(event:ConsoleEvent)=>{
-    let authorized=true;try{core.workspace(core.session(event.sessionId).ref.workspaceId);}catch{authorized=false;}
+    let authorized=true;try{const s=core.session(event.sessionId);core.workspace(s.ref.workspaceId,s.ref.engineId);}catch{authorized=false;}
     for(const [ws,p]of peers)if(p.sessions.has(event.sessionId)){
       if(!authorized){p.sessions.delete(event.sessionId);ws.close(1008,'Workspace authorization changed');}
       else send(ws,{type:'event',event});
@@ -150,7 +150,7 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
   const onReceipt=({device,receipt}:any)=>{for(const[ws,p]of peers)if(p.device===device)send(ws,{type:'receipt',receipt});};
   const onBound=(s:Session)=>{
     for(const [ws,peer] of peers)if(peer.sessions.has(s.id)){
-      try{core.workspace(s.ref.workspaceId);send(ws,{type:'snapshot',snapshot:snapshotWindow(s)});}
+      try{core.workspace(s.ref.workspaceId,s.ref.engineId);send(ws,{type:'snapshot',snapshot:snapshotWindow(s)});}
       catch{peer.sessions.delete(s.id);ws.close(1008,'Workspace authorization changed');}
     }
   };

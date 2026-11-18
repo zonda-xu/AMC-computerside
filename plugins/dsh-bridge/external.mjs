@@ -1,9 +1,9 @@
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { mapDurable } from './mapping.mjs';
-import { sessionRows, humanUserEvent } from './features.mjs';
+import { sessionRows, humanUserEvent, service } from './features.mjs';
 
-export function externalHandlers(ctl, observed, instanceId) {
+export function externalHandlers(ctl, observed, instanceId, ctx) {
   const pages=new Map();
   async function check(p){
     if(p.instanceId!==instanceId)throw new Error('DSH host generation changed');
@@ -12,6 +12,18 @@ export function externalHandlers(ctl, observed, instanceId) {
     if(!row?.cwd||await realpath(row.cwd)!==p.cwd)throw new Error('DSH external project identity changed');
   }
   return {
+    async projectDirectories(p) {
+      if (p.instanceId !== instanceId) throw new Error('DSH host generation changed');
+      const rows = sessionRows(await ctl.list({}, AbortSignal.timeout(30000)));
+      const paths = new Set(rows.filter(row => row.origin !== 'subagent' && typeof row.cwd === 'string').map(row => row.cwd));
+      const registry = service(ctx, 'workspaceRegistry');
+      if (typeof registry?.list === 'function') {
+        const projects = await registry.list();
+        if (!Array.isArray(projects) || projects.length > 20000) throw new Error('DSH workspace registry unavailable');
+        for (const project of projects) if (typeof project.path === 'string') paths.add(project.path);
+      }
+      return { paths: [...paths] };
+    },
     async externalList(p){
       if(p.instanceId!==instanceId)throw new Error('DSH host generation changed');
       let snapshot;

@@ -35,6 +35,11 @@ export class CodexExternalProvider implements ExternalSessionProvider {
     p.coverage = 'user and assistant text, reasoning summaries and recorded tool calls'; p.syncMode = 'manual-refresh';
     return p;
   }
+  async projectDirectories(cursor?: string) {
+    const rpc = await this.adapter.connection('');
+    const page = await listCodexThreads(rpc, 100, undefined, cursor);
+    return { paths: page.data.map(thread => thread.cwd), cursor: page.nextCursor || undefined };
+  }
   async discover(cwd: string, cursor?: string): Promise<DiscoveryPage> {
     const profile = await this.profile();
     requireValue(profile.discover.state === 'supported', 'external_unverified', profile.discover.reason, 409);

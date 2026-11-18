@@ -3,7 +3,7 @@ const $$ = selector => [...document.querySelectorAll(selector)];
 const token = new URLSearchParams(location.hash.slice(1)).get('token') || sessionStorage.getItem('amc-token') || '';
 if (token) sessionStorage.setItem('amc-token', token);
 history.replaceState(null, '', '/');
-let state, step = 0, reached = 0, environment, ticket, qrData, folder, network;
+let state, step = 0, reached = 0, environment, ticket, qrData, network;
 let busy = false, offline = false, deviceSignature = '';
 const labels = { codex: 'Codex', 'claude-code': 'Claude Code', opencode: 'OpenCode', 'deepseek-harness': 'DeepSeek Harness' };
 const commandDefaults = { codex: 'codex', 'claude-code': 'claude', opencode: 'opencode', 'deepseek-harness': 'dsh' };
@@ -12,7 +12,7 @@ const probeResults = new Map();
 const nextLabels = ['继续，选择连接方式 →', '继续，接入 AI 终端 →', '保存配置，进入配对 →', '查看已配对设备 →', '返回配对页面'];
 function notice(message = '', info = false) { $('#notice').textContent = message; $('#notice').classList.toggle('info', info); $('#notice').hidden = !message; }
 async function api(path, data) {
-  const response = await fetch('/v2/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(['save','session-library'].includes(path) ? 125000 : 25000) });
+  const response = await fetch('/v2/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(path === 'pick-folder' ? 310000 : ['save','session-library','project-settings'].includes(path) ? 125000 : 25000) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '操作没有完成，请重试。');
   return result;
@@ -67,6 +67,9 @@ function buildRuntimes() {
     row.innerHTML = `<div class="runtime-heading"><label><input type="checkbox" id="enable-${id}"><span></span></label></div><div class="runtime-body"><label for="command-${id}">程序名或可执行文件的完整路径（不含参数）</label><div class="input-action"><input id="command-${id}" autocomplete="off" spellcheck="false"><button class="secondary">检测版本</button></div><p class="runtime-status" aria-live="polite">尚未检测</p></div>`;
     row.querySelector('label span').textContent = name;
     const enabled = row.querySelector('input[type=checkbox]'); enabled.checked = config ? config.enabled !== false && config.expectedVersion !== 'DISABLED' : id === 'codex';
+    const syncLabel = document.createElement('label'), sync = document.createElement('input');
+    sync.type='checkbox'; sync.id='sync-'+id; sync.checked=state.config ? !!state.config.projectPolicy?.syncEngines.includes(id) : true;
+    syncLabel.append(sync,document.createTextNode('同步已有项目到手机')); row.querySelector('.runtime-body').prepend(syncLabel);
     const input = row.querySelector('input:not([type=checkbox])'); input.value = config?.command || commandDefaults[id];
     if (docs[id]) { const link = document.createElement('a'); link.href = docs[id]; link.textContent = '安装与登录说明'; link.target = '_blank'; link.rel = 'noreferrer'; row.querySelector('.runtime-heading').append(link); }
     row.querySelector('button').addEventListener('click', event => void action(event.currentTarget, () => probe(id), '检测中…'));
@@ -101,7 +104,7 @@ async function probe(id) {
   return result;
 }
 function setupInput() {
-  return { name: $('#host-name').value.trim(), mode: currentMode(), address: $('#address').value, publicHost: $('#public-host').value.trim(), workspace: $('#workspace').value.trim(),
+  return { name: $('#host-name').value.trim(), mode: currentMode(), address: $('#address').value, publicHost: $('#public-host').value.trim(), projectPolicy: projectPolicy(),
     runtimes: Object.fromEntries(Object.keys(labels).map(id => [id, { enabled: $(`#enable-${id}`).checked, command: $(`#command-${id}`).value.trim() }])) };
 }
 function validateNetwork() {
@@ -115,7 +118,7 @@ async function advance() {
   if (step === 0) { if (!environment?.openssl) throw new Error('请先安装 OpenSSL。'); showStep(1); }
   else if (step === 1) { validateNetwork(); showStep(2); }
   else if (step === 2) {
-    validateNetwork(); if (!$('#workspace').value.trim()) throw new Error('请选择项目目录。');
+    validateNetwork();
     state = await api('save', setupInput()); updateState(); showStep(3);
     notice('配置已保存在这台电脑。点击下方按钮启动网关并生成二维码。', true);
   } else if (step === 3) showStep(4); else showStep(3);
@@ -128,11 +131,12 @@ function updateState() {
   $('#gateway-dot').classList.toggle('online', state.running);
   $('#gateway-status').textContent = state.running ? '网关正在运行' : '网关尚未启动'; $('#stop').hidden = !state.running;
   if (state.config) {
-    $('#endpoint').textContent = state.config.endpoint; $('#workspace-summary').textContent = state.config.workspace;
+    $('#endpoint').textContent = state.config.endpoint; $('#workspace-summary').textContent = state.config.projectPolicy?.creationRoot || state.config.workspace || state.defaultCreationRoot;
     $('#fingerprint').textContent = state.config.fingerprint; $('#data-location').textContent = state.root;
     $('#generate-pair').textContent = state.running ? '生成新的配对二维码' : '启动网关并生成二维码';
-    $('#host-name').disabled = state.running; $('#workspace').disabled = state.running;
+    $('#host-name').disabled = state.running;
   }
+  renderProjects();
   if (!state.running && ticket) { clearPair(); $('#qr-status').textContent = '网关已停止，请重新启动。'; }
   if (state.pairingUsed && ticket) { clearPair(); $('#qr-status').textContent = '这张二维码已完成配对。'; $('#qr-announce').textContent = '手机已完成配对，这张二维码不再有效。'; }
   const active = state.devices.filter(d => !d.revoked);
@@ -164,15 +168,58 @@ function updateTimer() {
 function download(filename, data, type) {
   const href = URL.createObjectURL(new Blob([data], { type })); const link = document.createElement('a'); link.href = href; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(href), 1000);
 }
-async function browse(path) {
-  folder = await api('folders', { path }); $('#folder-browser').hidden = false; $('#folder-current').textContent = folder.path;
-  $('#folder-up').disabled = folder.path === folder.parent; $('#folder-list').replaceChildren();
-  folder.entries.forEach(item => { const button = document.createElement('button'); button.textContent = item.name; button.addEventListener('click', () => void action(button, () => browse(item.path))); $('#folder-list').append(button); });
-  if (!folder.entries.length) { const p = document.createElement('p'); p.textContent = '没有可显示的子文件夹，可直接选择当前目录。'; $('#folder-list').append(p); }
+const manualProjects = new Set(), excludedProjects = new Set();
+let projectSignature = '', projectLimit = 80;
+function loadProjectSettings() {
+  const policy=state.config?.projectPolicy;
+  $('#workspace').value=policy?.creationRoot || state.defaultCreationRoot;
+  manualProjects.clear(); excludedProjects.clear();
+  (policy?.manualProjects || []).forEach(p=>manualProjects.add(p));
+  (policy?.excludedProjects || []).forEach(p=>excludedProjects.add(p));
+  projectSignature=''; renderProjects();
+}
+function renderProjects() {
+  const known=state.knownProjects || [];
+  const filter=$('#project-filter').value.trim().toLowerCase();
+  const legacy=state.config?.legacyRoots || [];
+  const signature=JSON.stringify([known,[...manualProjects],[...excludedProjects],legacy,filter,projectLimit,!!state.config,state.running]);
+  if (projectSignature===signature) return;
+  projectSignature=signature;
+  $('#apply-projects').hidden=!state.config;
+  $('#sync-now').disabled=!state.running;
+  const items=$('#known-projects'); items.replaceChildren();
+  const byPath=new Map(known.map(project=>[project.path,project.engines]));
+  const paths=[...new Set([...byPath.keys(),...excludedProjects])].filter(path=>path.toLowerCase().includes(filter));
+  $('#project-filter').hidden=known.length+excludedProjects.size<=12 && !filter;
+  $('#more-projects').hidden=paths.length<=projectLimit;
+  const prior=$('#legacy-project-roots');prior.hidden=!legacy.length;prior.textContent='沿用的原授权目录：'+legacy.join('、');
+  for (const path of paths.slice(0,projectLimit)) {
+    const row=document.createElement('label'), check=document.createElement('input');
+    check.type='checkbox';check.checked=!excludedProjects.has(path);
+    const engines=byPath.get(path) || [];
+    row.append(check,document.createTextNode(path+(engines.length?' · '+engines.map(e=>labels[e]).join('、'):'')));
+    check.onchange=()=>{if(check.checked)excludedProjects.delete(path);else excludedProjects.add(path);};
+    items.append(row);
+  }
+  const manual=$('#manual-projects'); manual.replaceChildren();
+  for (const path of manualProjects) {
+    const row=document.createElement('div'), remove=document.createElement('button');
+    remove.type='button';remove.className='text-button';remove.textContent='移除';remove.setAttribute('aria-label','移除 '+path);
+    remove.onclick=()=>{manualProjects.delete(path);renderProjects();};
+    row.append(document.createTextNode(path+' '),remove);manual.append(row);
+  }
+}
+function addManual(path) {
+  if(!path)return;
+  manualProjects.add(path);excludedProjects.delete(path);renderProjects();
+}
+function projectPolicy() {
+  return {creationRoot:$('#workspace').value.trim(),manualProjects:[...manualProjects],excludedProjects:[...excludedProjects],
+    syncEngines:Object.keys(labels).filter(id=>$('#enable-'+id).checked && $('#sync-'+id).checked)};
 }
 async function init() {
   state = await api('state'); $('#system-label').textContent = state.system.name + ' 版';
-  $('#host-name').value = state.config?.name || state.name; $('#workspace').value = state.config?.workspace || '';
+  $('#host-name').value = state.config?.name || state.name; loadProjectSettings();
   const instructions = {
     win32: 'Windows：安装 Node.js 24（x64 或 ARM64）。OpenSSL 可由 Git for Windows 提供，助手会检测其默认安装目录。AI 程序支持原生 .exe 和常见 npm .cmd 启动器。',
     darwin: 'macOS：安装 Node.js 24.pkg。若未检测到 OpenSSL，可安装 Homebrew 的 openssl@3，并将其 bin 目录加入 PATH。Apple Silicon 与 Intel 均可使用对应的 Node.js 安装包。',
@@ -199,10 +246,13 @@ $$('[data-step]').forEach(button => button.addEventListener('click', () => { not
 $$('input[name=mode]').forEach(input => input.addEventListener('change', updateAddresses));
 ['#refresh-check', '#refresh-network'].forEach(id => $(id).addEventListener('click', event => void action(event.currentTarget, checkEnvironment, '检测中…')));
 $('#probe-all').addEventListener('click', event => void action(event.currentTarget, async () => { await Promise.all(Object.keys(labels).filter(id => $(`#enable-${id}`).checked).map(probe)); }, '检测中…'));
-$('#browse').addEventListener('click', event => void action(event.currentTarget, () => browse($('#workspace').value.trim() || state.home)));
-$('#folder-up').addEventListener('click', event => void action(event.currentTarget, () => browse(folder.parent)));
-$('#folder-select').addEventListener('click', () => { if (state.running) { notice('请先停止网关再修改项目目录。'); return; } $('#workspace').value = folder.path; $('#folder-browser').hidden = true; });
-$('#folder-close').addEventListener('click', () => { $('#folder-browser').hidden = true; });
+$('#browse').onclick=event=>void action(event.currentTarget,async()=>{const r=await api('pick-folder',{start:$('#workspace').value});if(r.path)$('#workspace').value=r.path;},'等待选择…');
+$('#add-manual').onclick=event=>void action(event.currentTarget,async()=>addManual((await api('pick-folder',{})).path),'等待选择…');
+$('#project-filter').oninput=()=>{projectLimit=80;renderProjects();};
+$('#more-projects').onclick=()=>{projectLimit+=80;renderProjects();};
+$('#add-path').onclick=()=>{addManual($('#manual-path').value.trim());$('#manual-path').value='';};
+$('#apply-projects').onclick=event=>void action(event.currentTarget,async()=>{state=await api('project-settings',{policy:projectPolicy()});updateState();notice('项目设置已保存',true);});
+$('#sync-now').onclick=event=>void action(event.currentTarget,async()=>{const r=await api('session-library',{operation:'project-sync'});$('#sync-status').textContent=Object.entries(r.status).map(([id,s])=>labels[id]+' · '+s).join(' / ');await refresh();});
 $('#generate-pair').addEventListener('click', event => void action(event.currentTarget, async () => {
   clearPair(); if (!state.running) await api('start', {});
   await refresh(); const result = await api('pair', {}); ticket = result.ticket; qrData = result.qr;

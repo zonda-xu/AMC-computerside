@@ -6,9 +6,13 @@ import { string, requireValue } from '../../../packages/protocol/src/validation.
 
 export async function desktopCatalog(core: Core, input: Record<string,unknown>, online: boolean) {
   if (input.operation==='list') {
-    const workspaces=core.store.list<Workspace>('workspace').filter(w=>{try { core.workspace(w.id); return true; } catch { return false; }});
-    const ids=new Set(workspaces.map(w=>w.id));
-    return {online,hostId:core.hostId,workspaces:workspaces.map(w=>({id:w.id,name:w.name})),items:core.store.list<Session>('session').filter(s=>ids.has(s.ref.workspaceId)).map(catalogEntry)};
+    const workspaces=core.visibleWorkspaces();
+    const ids=new Map(workspaces.map(w=>[w.id,w]));
+    return {online,hostId:core.hostId,workspaces:workspaces.map(w=>({id:w.id,name:w.name,engines:w.engines})),items:core.store.list<Session>('session').filter(s=>ids.has(s.ref.workspaceId) && (ids.get(s.ref.workspaceId)?.engines?.includes(s.ref.engineId) ?? true)).map(catalogEntry)};
+  }
+  if (input.operation==='project-sync') {
+    if (online) await core.projects.refresh();
+    return { projects:core.projects.known(), status:Object.fromEntries(core.projects.status) };
   }
   if (input.operation==='browser-config') {
     const path=string(input.path,'path',4096);
@@ -38,7 +42,7 @@ export async function desktopCatalog(core: Core, input: Record<string,unknown>, 
     requireValue(change && (online || change.action==='restore'),'offline','此操作需要网关在线',409);
     return core.editSession(id,change);
   }
-  const s=core.session(id); core.workspace(s.ref.workspaceId);
+  const s=core.session(id); core.workspace(s.ref.workspaceId,s.ref.engineId);
   if (input.operation==='read') return {...s,messages:s.messages.slice(-100),tools:s.tools.slice(-100)};
   requireValue(online && !s.archived,'offline','请启动网关并恢复会话',409);
   if (input.operation==='open') {

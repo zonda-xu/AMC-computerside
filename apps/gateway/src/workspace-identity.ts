@@ -19,11 +19,11 @@ export class WorkspaceIdentities {
   private core: Core;
   constructor(core: Core) { this.core = core; }
   confirmRoot(path: string) {
-    requireValue(this.core.allowedRoots.includes(path), 'root_not_granted', 'Authorized root was revoked');
+    requireValue(this.core.projects.hasRoot(path), 'root_not_granted', 'Authorized root was revoked');
     this.core.store.put('automation-root-identity-v1', path, directoryIdentity(path));
   }
   authorizeRoot(path: string) {
-    requireValue(this.core.allowedRoots.includes(path), 'root_not_granted', 'Authorized root was revoked');
+    requireValue(this.core.projects.hasRoot(path), 'root_not_granted', 'Authorized root was revoked');
     const previous = this.core.store.get<DirectoryIdentity>('automation-root-identity-v1', path);
     if (previous) { verifyDirectory(previous); return previous; }
     const identity = directoryIdentity(path);
@@ -32,11 +32,11 @@ export class WorkspaceIdentities {
   verify(workspaceId: string, automatic = false) {
     const workspace = this.core.store.get<Workspace>('workspace', workspaceId);
     requireValue(workspace, 'workspace_missing', 'Project not found');
-    requireValue([workspace.path, ...workspace.writeRoots].every(path => this.core.allowedRoots.some(root => inside(root, path))), 'root_not_granted', 'Authorized root was revoked');
+    requireValue([workspace.path, ...workspace.writeRoots].every(path => this.core.projects.permits(workspace, path)), 'root_not_granted', 'Authorized root was revoked');
     const identity = this.core.store.get<WorkspaceIdentity>('workspace-identity-v1', workspaceId);
     requireValue(identity || !automatic, 'workspace_confirmation_required', 'Explicit host confirmation is required for automatic access');
     if (!identity) return;
-    requireValue(identity.workspaceId === workspaceId && identity.directory.path === workspace.path && this.core.allowedRoots.includes(identity.root.path), 'workspace_changed', 'Project authorization identity changed');
+    requireValue(identity.workspaceId === workspaceId && identity.directory.path === workspace.path && this.core.projects.hasRoot(identity.root.path), 'workspace_changed', 'Project authorization identity changed');
     const root = this.core.store.get<DirectoryIdentity>('automation-root-identity-v1', identity.root.path);
     requireValue(root && JSON.stringify(root) === JSON.stringify(identity.root), 'workspace_changed', 'Authorized root identity changed');
     verifyDirectory(identity.root); verifyDirectory(identity.directory);

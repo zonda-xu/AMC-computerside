@@ -32,6 +32,8 @@ export class ExternalSync {
       if (!runtime || runtime.enabled === false || runtime.expectedVersion === 'DISABLED') return;
       for (const workspace of this.core.store.list<Workspace>('workspace')) {
         if (this.stop.signal.aborted) return;
+        const engines = this.core.projects.engines(workspace.path);
+        if (engines?.length && !engines.includes(engineId)) { this.statuses.delete(workspace.id + ':' + engineId); continue; }
         const key = workspace.id + ':' + engineId; const previous = this.statuses.get(key);
         if (previous && previous.nextAt > Date.now()) continue;
         const status: ExternalSyncStatus = { workspaceId: workspace.id, engineId, state: 'running', failures: previous?.failures ?? 0, nextAt: 0, lastSuccessAt: previous?.lastSuccessAt };

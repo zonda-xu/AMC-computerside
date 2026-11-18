@@ -30,6 +30,11 @@ export class DshExternalProvider implements ExternalSessionProvider {
     return p;
   }
   private async instance(): Promise<string> { const p = await this.profile(); requireValue(p.history.state === 'supported', 'external_unverified', 'DSH external protocol or version mismatch', 409); return this.peer!; }
+  async projectDirectories() {
+    const r = await this.adapter.call('projectDirectories', { instanceId: await this.instance() });
+    requireValue(Array.isArray(r.paths) && r.paths.every((p: unknown) => typeof p === 'string'), 'external_format', 'DSH 桥接未返回工作区列表，请确认已加载新版插件');
+    return { paths: r.paths as string[] };
+  }
   async discover(cwd: string, cursor?: string): Promise<DiscoveryPage> {
     const r = await this.adapter.call('externalList', { cwd, cursor, instanceId: await this.instance() });
     requireValue(Array.isArray(r.items) && r.items.length <= 50, 'external_format', 'Malformed DSH list');

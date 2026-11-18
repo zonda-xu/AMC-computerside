@@ -26,7 +26,7 @@ export async function editCatalog(core: Core, id: string, change: LibraryChange)
     core.workspace(removed.workspaceId); return { id, deleted: true };
   }
   const s = core.session(id);
-  core.workspace(s.ref.workspaceId);
+  core.workspace(s.ref.workspaceId,s.ref.engineId);
   requireValue(Number.isSafeInteger(change.revision) && change.revision === (s.catalogRevision ?? 0),
     'catalog_changed', '会话已被另一端更新，请刷新后再操作', 409);
   requireValue(!s.deletionPending || change.action === 'delete', 'delete_pending', '删除尚未完成，只能重试删除', 409);
@@ -51,7 +51,7 @@ export async function editCatalog(core: Core, id: string, change: LibraryChange)
       // Validate the native target first. An offline provider or an active
       // third-party terminal must not make an otherwise restorable item stuck.
       const remove = await adapter.prepareDelete(s);
-      const latest = core.session(id); core.workspace(latest.ref.workspaceId); canClose(core, latest);
+      const latest = core.session(id); core.workspace(latest.ref.workspaceId,latest.ref.engineId); canClose(core, latest);
       if (!latest.deletionPending) {
         latest.deletionPending = true; core.store.put('session', id, latest); core.emit('catalog.changed');
       }

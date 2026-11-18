@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, X509Certificate } from 'node:crypto';
-import { readFile, readdir, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import QRCode from 'qrcode';
@@ -12,7 +12,8 @@ import { desktopCatalog } from '../../gateway/src/desktop-catalog.ts';
 import { canonical } from '../../gateway/src/files.ts';
 import { Store, digest } from '../../gateway/src/store.ts';
 import { addresses, commands, engines, hostDefaults, opensslCommand, readConfig, saveHost, system, validHostname, type HostConfig, type SetupInput } from './host.ts';
-import { probeRuntime } from './host.ts';
+import { pickHostFolder } from './folder-picker.ts';
+import { defaultCreationRoot, normalizePolicy, writeConfig, probeRuntime } from './host.ts';
 import { RuntimeManager } from './runtime.ts';
 
 const publicDir = fileURLToPath(new URL('../public/', import.meta.url));
@@ -62,12 +63,12 @@ export class DesktopService {
   }
   async state() {
     const config = await this.config();
-    let devices: unknown[] = [], pairingUsed = false;
-    if (config) { const store = new Store(join(config.dataDir, 'console.sqlite')); try { devices = store.devices(); pairingUsed = !!store.db.prepare('SELECT used FROM tickets WHERE hash=? AND used=1').get(this.pairingHash); } finally { store.close(); } }
+    let devices: unknown[] = [], knownProjects: {path:string; engines:string[]}[] = [], pairingUsed = false;
+    if (config) { const store = new Store(join(config.dataDir, 'console.sqlite')); try { devices = store.devices(); knownProjects = store.list<{path:string; engines:string[]}>('workspace-origins-v1').filter(p=>p.engines.length>0); pairingUsed = !!store.db.prepare('SELECT used FROM tickets WHERE hash=? AND used=1').get(this.pairingHash); } finally { store.close(); } }
     const runtimeStates = config ? await Promise.all((['codex', 'opencode'] as const).map(engine => this.runtimes.probe(engine, config.runtimes[engine]))) : [];
-    return { protocolVersion: 2, ...hostDefaults(), home: homedir(), root: this.root, running: this.ready, busy: this.busy, error: this.lastError, devices, pairingUsed, runtimeStates,
+    return { protocolVersion: 2, ...hostDefaults(), defaultCreationRoot:defaultCreationRoot(), knownProjects, home: homedir(), root: this.root, running: this.ready, busy: this.busy, error: this.lastError, devices, pairingUsed, runtimeStates,
       config: config ? { name: config.name, hostId: config.hostId, address: config.listen, endpoint: config.publicEndpoint,
-        workspace: config.allowedWorkspaceRoots[0], runtimes: Object.fromEntries(engines.map(engine => { const runtime = config.runtimes[engine]; return [engine, { command: runtime.command, expectedVersion: runtime.expectedVersion, enabled: runtime.enabled, endpoint: engine === 'codex' ? runtime.endpoint : undefined }]; })),
+        workspace: config.allowedWorkspaceRoots[0], legacyRoots:config.allowedWorkspaceRoots, projectPolicy:config.projectPolicy, runtimes: Object.fromEntries(engines.map(engine => { const runtime = config.runtimes[engine]; return [engine, { command: runtime.command, expectedVersion: runtime.expectedVersion, enabled: runtime.enabled, endpoint: engine === 'codex' ? runtime.endpoint : undefined }]; })),
         fingerprint: new X509Certificate(await readFile(config.caFile)).fingerprint256 } : null };
   }
   async exclusive<T>(fn: () => Promise<T>) {
@@ -168,7 +169,7 @@ export class DesktopService {
     const config=await this.config(); if (!config) throw new Error('请先保存主机配置');
     const store=new Store(join(config.dataDir,'console.sqlite'));
     try {
-      const core=new Core(store,config.hostId,await Promise.all(config.allowedWorkspaceRoots.map(canonical)));
+      const core=new Core(store,config.hostId,await Promise.all(config.allowedWorkspaceRoots.map(canonical)),config.projectPolicy);
       return await desktopCatalog(core,input,false);
     } finally { store.close(); }
   }
@@ -202,12 +203,17 @@ export class DesktopService {
       case '/v2/revoke': return this.revoke(input.id);
       case '/v2/verify': { const config = await this.config(); if (!config || !this.ready) throw new Error('请先启动网关。'); return verifyEndpoint(config); }
       case '/v2/network': return networkFiles(input.publicHost, input.secret || randomBytes(32).toString('base64url'));
-      case '/v2/folders': {
-        const path = resolve(typeof input.path === 'string' ? input.path : homedir());
-        if (!(await stat(path)).isDirectory()) throw new Error('该路径不是目录。');
-        const entries = await readdir(path, { withFileTypes: true });
-        return { path, parent: dirname(path), entries: entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => ({ name: e.name, path: join(path, e.name) })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 500) };
-      }
+      case '/v2/project-settings': return this.exclusive(async () => {
+        const config = await this.config();
+        if (!config) throw new Error('请先保存主机配置。');
+        const previous = config.projectPolicy ?? {creationRoot:defaultCreationRoot(), syncEngines:[], manualProjects:[], excludedProjects:[]};
+        const policy = typeof input.add === 'string' ? {...previous, manualProjects:[...previous.manualProjects,input.add], excludedProjects:previous.excludedProjects.filter(p=>p!==input.add)} : input.policy;
+        config.projectPolicy = await normalizePolicy(policy,config.runtimes as SetupInput['runtimes'],config.projectPolicy);
+        await writeConfig(this.root,config);
+        if (this.ready) await this.sessions({operation:'reload-project-settings'});
+        return this.state();
+      });
+      case '/v2/pick-folder': return this.exclusive(() => pickHostFolder(input.start));
       default: throw new Error('接口不存在。');
     }
   }

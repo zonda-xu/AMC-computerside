@@ -27,6 +27,7 @@ export class DevEcoCodeAdapter extends OpenCodeAdapter {
     const doc=await response.json() as Native;
     if(!doc.paths?.['/api/session']?.get || !doc.paths?.['/api/event']?.get || !doc.paths?.['/session/{sessionID}/prompt_async']?.post ||
         !doc.paths?.['/session/{sessionID}/message']?.get || !doc.paths?.['/session/status']?.get)throw Error('此 DevEco Code 服务缺少接续所需会话接口');
+    this.projectListRoute = doc.paths?.['/api/project']?.get ? '/api/project' : doc.paths?.['/project']?.get ? '/project' : '';
     return service;
   }
   async probe(){

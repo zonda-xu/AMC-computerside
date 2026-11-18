@@ -29,18 +29,19 @@ import { RuntimeManager } from '../../desktop/src/runtime.ts';
 import { desktopCatalog } from './desktop-catalog.ts';
 import { RuntimeRecovery } from './runtime-recovery.ts';
 import { RuntimeUpdateMonitor, type RuntimeUpdateConfig } from './runtime-updates.ts';
-export interface HostConfig { hostId:string;name:string;os:string;listen:string;port:number;publicEndpoint:string;dataDir:string;caFile:string;certFile:string;keyFile:string;allowedWorkspaceRoots:string[];runtimes:Record<EngineId,RuntimeConfig>;automation?:AutomationConfig;push?:HuaweiPushConfig;runtimeUpdates?:RuntimeUpdateConfig }
+import type { ProjectPolicy } from './native-projects.ts';
+export interface HostConfig { projectPolicy?:ProjectPolicy; hostId:string;name:string;os:string;listen:string;port:number;publicEndpoint:string;dataDir:string;caFile:string;certFile:string;keyFile:string;allowedWorkspaceRoots:string[];runtimes:Record<EngineId,RuntimeConfig>;automation?:AutomationConfig;push?:HuaweiPushConfig;runtimeUpdates?:RuntimeUpdateConfig }
 const configPath=process.argv[2]||'host.config.json';
 const c=JSON.parse(await readFile(configPath,'utf8')) as HostConfig;
 const automation=automationSettings(c.automation);
-if(!c.hostId||!c.name||c.port!==8899||!c.allowedWorkspaceRoots?.length)throw new Error('Invalid host configuration');
+if(!c.hostId||!c.name||c.port!==8899||(!c.allowedWorkspaceRoots?.length && !c.projectPolicy))throw new Error('Invalid host configuration');
 const stateDir=process.env.AMC_STATE_DIR||join(homedir(),'.ai-maid-cafe');await mkdir(stateDir,{recursive:true,mode:0o700});
 const lockPath=join(stateDir,'gateway.lock');
 try { const old=JSON.parse(await readFile(lockPath,'utf8'));let running=true;try{process.kill(old.pid,0);}catch(e){if((e as NodeJS.ErrnoException).code==='ESRCH')running=false;}if(running)throw new Error('A gateway already runs for this OS user');await unlink(lockPath); }catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
 const lock=await open(lockPath,'wx',0o600);await lock.writeFile(JSON.stringify({pid:process.pid}));await lock.close();
 await mkdir(c.dataDir,{recursive:true,mode:0o700});
 const store=new Store(join(c.dataDir,'console.sqlite'));store.recover();
-const core=new Core(store,c.hostId,await Promise.all(c.allowedWorkspaceRoots.map(canonical)));
+const core=new Core(store,c.hostId,await Promise.all(c.allowedWorkspaceRoots.map(canonical)),c.projectPolicy);
 if(c.runtimes.codex.enabled!==false){
   try{const registered=await new RuntimeManager(c.dataDir).connect('codex',c.runtimes.codex);c.runtimes.codex={...c.runtimes.codex,endpoint:registered.endpoint,runtimeIdentity:registered.identity,registeredVersion:registered.version};}
   catch(error){c.runtimes.codex={...c.runtimes.codex,runtimeIdentity:undefined,registeredVersion:undefined};console.error('Codex 共享运行时未连接：',(error as Error).message);}
@@ -60,7 +61,7 @@ const runtimeRecovery=new RuntimeRecovery(core);
 const runtimeUpdates=new RuntimeUpdateMonitor(c.runtimeUpdates);core.runtimeUpdates=runtimeUpdates;
 core.automation={settings:automation,discovery,externalSync};
 const pushTransport=c.push?await HuaweiPushTransport.load(c.push):undefined;
-const push=new PushCoordinator(store,c.hostId,{transport:pushTransport,authorize:async(session,signal)=>{signal.throwIfAborted();core.workspaceIdentities.verify(session.ref.workspaceId,true);return true;}});
+const push=new PushCoordinator(store,c.hostId,{transport:pushTransport,authorize:async(session,signal)=>{signal.throwIfAborted();core.workspace(session.ref.workspaceId,session.ref.engineId);core.workspaceIdentities.verify(session.ref.workspaceId,true);return true;}});
 store.notificationIntent=(event,session)=>{push.enqueue(session.id,event.seq);};
 const server=makeServer(core,{cert:await readFile(c.certFile),key:await readFile(c.keyFile),minVersion:'TLSv1.2'},{name:c.name,os:c.os},push);
 const bridgeConfig=c.runtimes['deepseek-harness'];
@@ -70,13 +71,13 @@ if(bridgeTokenFile&&(!bridgeToken||Buffer.byteLength(bridgeToken)>4096))throw ne
 const bridgeHTTP=createServer((_req,res)=>res.writeHead(404).end());const bridgeWS=new WebSocketServer({noServer:true,maxPayload:8*1024*1024});
 bridgeHTTP.on('upgrade',(req,socket,head)=>{const token=Buffer.from(req.headers.authorization?.replace(/^Bearer /,'')||'');const expected=Buffer.from(bridgeToken);if(!expected.length||token.length!==expected.length||!timingSafeEqual(token,expected)){socket.destroy();return;}bridgeWS.handleUpgrade(req,socket,head,ws=>dsh.attach(ws));});
 let stopping=false;
-async function shutdown(code=0){if(stopping)return;stopping=true;server.close();bridgeHTTP.close();bridgeWS.close();runtimeUpdates.stop();await Promise.all([discovery.close(),externalSync.close(),core.external.close(),push.stop(),runtimeRecovery.close()]);for(const a of core.adapters.values())a.close();await core.drain();await unlink(lockPath).catch(()=>{});store.close();process.exit(code);}
+async function shutdown(code=0){if(stopping)return;stopping=true;server.close();bridgeHTTP.close();bridgeWS.close();runtimeUpdates.stop();await Promise.all([core.projects.close(),discovery.close(),externalSync.close(),core.external.close(),push.stop(),runtimeRecovery.close()]);for(const a of core.adapters.values())a.close();await core.drain();await unlink(lockPath).catch(()=>{});store.close();process.exit(code);}
 const listen=(server:import('node:net').Server,port:number,address:string)=>new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(port,address,resolve);});
 try {
   const listeners = [listen(server, c.port, c.listen)];
   if (bridgeToken) listeners.push(listen(bridgeHTTP, 8898, '127.0.0.1'));
   await Promise.all(listeners);
-  discovery.start();externalSync.start();push.start();runtimeRecovery.start();runtimeUpdates.start();
+  core.projects.start();discovery.start();externalSync.start();push.start();runtimeRecovery.start();runtimeUpdates.start();
   console.log(`AI Maid Café: ${c.name} (${c.hostId}) — ${c.listen}:${c.port}`);
   process.send?.({type:'ready'});
 } catch (error) {
@@ -90,7 +91,10 @@ try {
 }
 process.on('message',(message: {type?:string; requestId?:string; input?:Record<string,unknown>})=>{
   if(message?.type !== 'session-library' || !message.requestId || !message.input) return;
-  void desktopCatalog(core,message.input,true).then(
+  const result = message.input.operation === 'reload-project-settings'
+    ? readFile(configPath,'utf8').then(async raw => { const updated = JSON.parse(raw) as HostConfig; if (!updated.projectPolicy) throw Error('未保存项目设置'); await core.projects.configure(updated.projectPolicy); return {saved:true}; })
+    : desktopCatalog(core,message.input,true);
+  void result.then(
     data=>process.send?.({type:'session-library-result',requestId:message.requestId,data}),
     error=>process.send?.({type:'session-library-result',requestId:message.requestId,error:error instanceof Error?error.message:'会话操作失败'}));
 });

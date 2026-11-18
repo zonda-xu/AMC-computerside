@@ -25,6 +25,15 @@ export class ClaudeExternalProvider implements ExternalSessionProvider {
     }catch{}
     return profile;
   }
+  async projectDirectories() {
+    const sdk = await this.adapter.loadSdk(false);
+    await this.adapter.checkVersion();
+    const rows = await sdk.listSessions();
+    requireValue(Array.isArray(rows) && rows.length <= 50000, 'external_format', 'Claude 会话目录列表不可用');
+    const paths = new Set<string>();
+    for (const row of rows) if (typeof row.cwd === 'string' && row.cwd) paths.add(row.cwd);
+    return { paths: [...paths] };
+  }
   async discover(cwd:string,cursor?:string):Promise<DiscoveryPage>{
     requireValue((await this.profile()).discover.state==='supported','external_unavailable','Claude SDK history unavailable',409);
     const offset=cursor?Number(cursor):0;requireValue(Number.isSafeInteger(offset)&&offset>=0&&offset<=5000,'external_cursor','Invalid history cursor');

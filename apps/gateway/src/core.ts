@@ -7,6 +7,7 @@ import { exactRef, object, requireValue, validateCommand, validateFormAnswer } f
 import { editCatalog, type LibraryChange } from './session-library.ts';
 import { Store, digest } from './store.ts';
 import { canonical, inside, overlaps, readProject, MAX_FILE } from './files.ts';
+import { NativeProjects, type ProjectPolicy } from './native-projects.ts';
 import { WorkspaceCreator } from './workspace-create.ts';
 import { ExternalSessions } from './external.ts';
 import type { AutomationSettings } from './automation.ts';
@@ -24,7 +25,8 @@ export class Core extends EventEmitter {
   automation?:{settings:AutomationSettings;discovery:WorkspaceDiscovery;externalSync:ExternalSync};
   runtimeUpdates?:RuntimeUpdateMonitor;
   lastListenerFailure?:{code:'listener_failed';at:number};
-  constructor(store:Store,hostId:string,allowedRoots:string[]){super({captureRejections:true});this.store=store;this.hostId=hostId;this.allowedRoots=allowedRoots;}
+  readonly projects: NativeProjects;
+  constructor(store:Store,hostId:string,allowedRoots:string[],policy?:ProjectPolicy){super({captureRejections:true});this.store=store;this.hostId=hostId;this.allowedRoots=allowedRoots;this.projects=new NativeProjects(this,policy);}
   [captureRejectionSymbol](){this.lastListenerFailure={code:'listener_failed',at:Date.now()};}
   emitAutomation(type:string,value:unknown,onFailure:()=>void){
     const failed=()=>{try{onFailure();}catch{}};
@@ -33,7 +35,15 @@ export class Core extends EventEmitter {
     }
   }
   session(id:string){const s=this.store.get<Session>('session',id);requireValue(s,'session_missing','Session not found',404);return s;}
-  workspace(id:string){const w=this.store.get<Workspace>('workspace',id);requireValue(w,'workspace_missing','Project not found',404);for(const root of [w.path,...w.writeRoots])requireValue(this.allowedRoots.some(base=>inside(base,root)),'root_not_granted','Project is outside current host-configured workspace roots',403);this.workspaceIdentities.verify(id);return w;}
+  visibleWorkspaces(): Workspace[] {
+    return this.store.list<Workspace>('workspace').flatMap(w => { try { return [this.workspace(w.id)]; } catch { return []; } });
+  }
+  workspace(id:string,engine?:EngineId){const w=this.store.get<Workspace>('workspace',id);requireValue(w,'workspace_missing','Project not found',404);const engines=this.projects.engines(w.path);
+    requireValue(!engines || (engine ? engines.includes(engine) : engines.length>0),'root_not_granted','Project is outside current host-configured workspace roots',403);
+    for (const root of [w.path,...w.writeRoots]) requireValue(this.projects.permits(w,root),'root_not_granted','Project is outside current host-configured workspace roots',403);
+    this.workspaceIdentities.verify(id);
+    return engines ? {...w,engines} : w;
+  }
   context(engineId:EngineId):AdapterContext{
     let runtime=this.store.get<{id:string;epoch:number}>('runtime',engineId);if(!runtime){runtime={id:randomUUID(),epoch:0};this.store.put('runtime',engineId,runtime);}
     return{runtimeInstanceId:runtime.id,epoch:runtime.epoch,generation:runtime.epoch,
@@ -71,7 +81,7 @@ export class Core extends EventEmitter {
     const s=this.session(id);const runtime=this.store.get<{id:string;epoch:number}>('runtime',s.ref.engineId);
     const adopting=s.externalSource&&s.binding?.state==='unbound'&&runtime?.id===binding.runtimeInstanceId;
     requireValue((binding.runtimeInstanceId===s.ref.runtimeInstanceId||adopting)&&binding.nativeSessionId===s.ref.nativeSessionId&&Number.isSafeInteger(binding.generation)&&binding.generation>=s.epoch,'binding_mismatch','Binding does not match registered session identity',409);
-    this.workspace(s.ref.workspaceId);if(adopting)s.ref={...s.ref,runtimeInstanceId:binding.runtimeInstanceId};
+    this.workspace(s.ref.workspaceId,s.ref.engineId);if(adopting)s.ref={...s.ref,runtimeInstanceId:binding.runtimeInstanceId};
     if(binding.generation!==(s.binding?.generation??s.epoch))s.interactions=s.interactions.map(i=>i.status==='resolved'?i:{...i,status:'stale'});
     s.binding=binding;s.epoch=binding.generation;this.store.put('session',id,s);
     if(adopting)this.emit('session.bound',s);
@@ -81,7 +91,7 @@ export class Core extends EventEmitter {
   async reconcile(id:string){
     const previous=(this.queues.get(id)??Promise.resolve()).catch(()=>{});
     const work=previous.then(async()=>{
-      const s=this.session(id);this.workspace(s.ref.workspaceId);
+      const s=this.session(id);this.workspace(s.ref.workspaceId,s.ref.engineId);
       requireValue(!s.archived && !s.deletionPending,'session_archived','请先恢复归档会话',409);
       requireValue(s.binding&&s.binding.state!=='unbound','binding_unavailable','Read-only history has no runtime binding',409);
       const a=this.adapters.get(s.ref.engineId);requireValue(a,'runtime_missing','Runtime adapter unavailable',409);
@@ -99,7 +109,7 @@ export class Core extends EventEmitter {
     requireValue(request.protocolVersion===2&&request.hostId===this.hostId,'host_mismatch','Attachment targets another host or protocol',409);
     requireValue(typeof request.clientRequestId==='string'&&/^[A-Za-z0-9_.:-]{1,200}$/.test(request.clientRequestId),'request_invalid','Invalid attachment request ID');
     requireValue(typeof request.runtimeInstanceId==='string'&&request.runtimeInstanceId.length>0,'runtime_missing','Select a registered native runtime');
-    const ref=object(request.ref);const initial=this.session(id);this.workspace(initial.ref.workspaceId);
+    const ref=object(request.ref);const initial=this.session(id);this.workspace(initial.ref.workspaceId,initial.ref.engineId);
     const requestId=request.clientRequestId;
     const received=this.store.receive(device,requestId,{kind:'session.attach',sessionId:id,...request});
     if(!received.fresh){
@@ -109,7 +119,7 @@ export class Core extends EventEmitter {
     const key=`attach:${request.runtimeInstanceId}:${initial.ref.nativeSessionId}`;
     const previous=Promise.all([this.queues.get(id),this.queues.get(key)].map(p=>p?.catch(()=>{})));
     const work=previous.then(async()=>{
-      const s=this.session(id);this.workspace(s.ref.workspaceId);
+      const s=this.session(id);this.workspace(s.ref.workspaceId,s.ref.engineId);
       requireValue(!s.archived && !s.deletionPending,'session_archived','请先恢复归档会话',409);
       requireValue(exactRef(ref,s.ref),'target_mismatch','Attachment source identity changed',409);
       requireValue(s.externalSource&&s.binding&&s.binding.state!=='attached','binding_exists','Only unbound or disconnected history requires explicit attachment',409);
@@ -121,7 +131,7 @@ export class Core extends EventEmitter {
       requireValue(descriptor.controlCapabilities?.attach===true&&descriptor.connectionState==='attached'&&descriptor.nativeIdentity,'attachment_unavailable',descriptor.detail||'Native session attachment has not been verified',409);
       requireValue(!this.store.list<Session>('session').some(other=>other.id!==id&&other.binding?.state!=='unbound'&&other.ref.runtimeInstanceId===runtime.runtimeInstanceId&&other.ref.nativeSessionId===s.ref.nativeSessionId),'native_session_owned','This native session already has a managed projection',409);
       requireValue(exactRef(this.session(id).ref,ref)&&this.session(id).binding?.state!=='attached','target_mismatch','Attachment source changed during verification',409);
-      this.workspace(s.ref.workspaceId);
+      this.workspace(s.ref.workspaceId,s.ref.engineId);
       this.store.dispatching(device,requestId);
       const binding=await adapter.attachExistingSession({...s,ref:{...s.ref,runtimeInstanceId:runtime.runtimeInstanceId}},descriptor.nativeIdentity);
       requireValue(binding.nativeIdentity===descriptor.nativeIdentity&&binding.state==='attached','binding_mismatch','Native attachment was not confirmed by the selected runtime',409);
@@ -145,7 +155,7 @@ export class Core extends EventEmitter {
     // Recheck immediately before insertion, after all asynchronous canonicalization.
     const all=this.store.list<Workspace>('workspace');
     for(const w of all)requireValue(!w.writeRoots.some(a=>roots.some(b=>overlaps(a,b))),'overlapping_project','Managed project roots overlap',409);
-    const w:Workspace={id:randomUUID(),hostId:this.hostId,name,path:actual,writeRoots:[...new Set(roots)]};this.store.put('workspace',w.id,w);this.emit('catalog.changed');return w;
+    const w:Workspace={id:randomUUID(),hostId:this.hostId,name,path:actual,writeRoots:[...new Set(roots)]};this.store.transaction(()=>{this.projects.index(w);this.store.put('workspace',w.id,w);});this.emit('catalog.changed');return w;
   }
   async ensureWorkspace(path:string,name:string,validate?:()=>Promise<void>,notify=true,automaticRoot?:string){
     const actual=await canonical(path);
@@ -156,10 +166,10 @@ export class Core extends EventEmitter {
     if(previous){this.workspace(previous.id);if(automaticRoot)this.workspaceIdentities.verify(previous.id,true);return previous;}
     for(const w of all)requireValue(![w.path,...w.writeRoots].some(root=>overlaps(root,actual)),'overlapping_project','Managed project roots overlap',409);
     const w:Workspace={id:randomUUID(),hostId:this.hostId,name,path:actual,writeRoots:[actual]};
-    this.store.transaction(()=>{if(automaticRoot)this.workspaceIdentities.bindNew(w,automaticRoot);this.store.put('workspace',w.id,w);});if(notify)this.emit('catalog.changed');return w;
+    this.store.transaction(()=>{if(automaticRoot)this.workspaceIdentities.bindNew(w,automaticRoot);this.projects.index(w);this.store.put('workspace',w.id,w);});if(notify)this.emit('catalog.changed');return w;
   }
   async createSession(device:string,requestId:string,wid:string,engineId:EngineId,model?:ModelIdentity,runtimeInstanceId?:string){
-    requireValue(ENGINES.includes(engineId),'engine_invalid','Unknown runtime');const w=this.workspace(wid);const adapter=this.adapters.get(engineId);
+    requireValue(ENGINES.includes(engineId),'engine_invalid','Unknown runtime');const w=this.workspace(wid,engineId);const adapter=this.adapters.get(engineId);
     requireValue(adapter,'runtime_missing','Runtime adapter is unavailable');
     if(model)requireValue(typeof model.providerId==='string'&&model.providerId.length>0&&typeof model.modelId==='string'&&model.modelId.length>0&&typeof model.label==='string','model_invalid','Invalid model identity');
     const runtimeContext=this.context(engineId);requireValue(!runtimeInstanceId||runtimeInstanceId===runtimeContext.runtimeInstanceId,'runtime_mismatch','Creation targets another runtime',409);
@@ -202,10 +212,14 @@ export class Core extends EventEmitter {
     try { return await result; }
     finally { this.inFlight.delete(work); if (this.queues.get(id) === work) this.queues.delete(id); }
   }
+  private activeWriteRoots(session: Session): string[] {
+    const project = this.store.get<Workspace>('workspace',session.ref.workspaceId);
+    return [...(project?.writeRoots ?? [session.cwd]), ...(session.writeRoots ?? []), ...(session.grantedRoots ?? [])];
+  }
   async drain(){await Promise.all([...this.inFlight]);}
   async execute(device:string,c:Command){
     const s=this.session(c.sessionId);const a=this.adapters.get(s.ref.engineId);const p=c.payload;
-    requireValue(a,'runtime_missing','Runtime adapter unavailable',409);requireValue(c.hostId===this.hostId&&exactRef(c.ref,s.ref),'target_mismatch','Session identity changed',409);this.workspace(s.ref.workspaceId);
+    requireValue(a,'runtime_missing','Runtime adapter unavailable',409);requireValue(c.hostId===this.hostId&&exactRef(c.ref,s.ref),'target_mismatch','Session identity changed',409);this.workspace(s.ref.workspaceId,s.ref.engineId);
     requireValue(!s.archived && !s.deletionPending,'session_archived','请先从归档恢复会话',409);
     const b=s.binding;requireValue(b?.state==='attached','binding_unavailable',b?.reason??'No native control binding',409);
     requireValue(p.expectedGeneration===b.generation,'generation_mismatch','Command targets an obsolete runtime generation',409);
@@ -218,12 +232,12 @@ export class Core extends EventEmitter {
       requireValue(steer?s.state==='running'&&p.runId===s.runId&&s.runGeneration===b.generation:!ACTIVE.includes(s.state),'run_mismatch',steer?'Steer must target the current running turn':'Execute native commands between runs',409);
       requireValue(!this.store.unresolvedCancel(s.id)&&!this.store.unresolvedSubmission(s.id),'operation_unresolved','Previous native operation requires reconciliation',409);
       const ids=p.attachmentIds??[];requireValue(Array.isArray(ids)&&ids.length<=10&&ids.every(id=>typeof id==='string'),'attachments_invalid','Invalid attachment IDs');
-      const w=this.workspace(s.ref.workspaceId);requireValue(await realpath(w.path)===w.path,'workspace_changed','Project identity changed');
+      const w=this.workspace(s.ref.workspaceId,s.ref.engineId);requireValue(await realpath(w.path)===w.path,'workspace_changed','Project identity changed');
       const attachments=await Promise.all(ids.map(async id=>{const attachment=this.store.get<Attachment>('attachment',id);requireValue(attachment&&attachment.workspaceId===w.id,'attachment_mismatch','Attachment is not in this project',403);const bytes=await readProject(w,attachment.relativePath,MAX_FILE);requireValue(digest(bytes)===attachment.sha256,'attachment_changed','Uploaded attachment changed',409);return{...attachment,dataBase64:bytes.toString('base64')};}));
       requireValue(text.trim()||attachments.length,'empty_input','Input is empty');
       const roots=[...w.writeRoots,...(s.grantedRoots||[])];
-      for(const root of roots)requireValue(this.allowedRoots.some(base=>inside(base,root)),'root_not_granted','A previous grant is outside current host-configured workspace roots',403);
-      for(const other of this.store.list<Session>('session'))if(other.id!==s.id&&other.binding?.state!=='unbound'&&(ACTIVE.includes(other.state)||this.store.unresolvedSubmission(other.id))){const ow=this.workspace(other.ref.workspaceId);requireValue(![...ow.writeRoots,...(other.writeRoots||[]),...(other.grantedRoots||[])].some(x=>roots.some(y=>overlaps(x,y))),'directory_busy','Another managed operation owns this directory',409);}
+      for(const root of roots)requireValue(this.projects.permits(w,root),'root_not_granted','A previous grant is outside current host-configured workspace roots',403);
+      for(const other of this.store.list<Session>('session'))if(other.id!==s.id&&other.binding?.state!=='unbound'&&(ACTIVE.includes(other.state)||this.store.unresolvedSubmission(other.id))){requireValue(!this.activeWriteRoots(other).some(x=>roots.some(y=>overlaps(x,y))),'directory_busy','Another managed operation owns this directory',409);}
       const latest=this.session(s.id);requireValue(latest.binding?.state==='attached'&&latest.binding.generation===b.generation&&latest.runId===s.runId&&latest.state===s.state,'generation_mismatch','Native session changed during validation',409);
       const nativeRequestId=digest(JSON.stringify([device,c.clientRequestId]));
       this.setReceipt(device,{clientRequestId:c.clientRequestId,status:'received',generation:b.generation,nativeRequestId,...(steer?{runId:s.runId}:{})});this.store.dispatching(device,c.clientRequestId);
@@ -235,19 +249,18 @@ export class Core extends EventEmitter {
       const attachmentIds=p.attachmentIds??[];requireValue(Array.isArray(attachmentIds)&&attachmentIds.length<=10&&attachmentIds.every(id=>typeof id==='string'),'attachments_invalid','Invalid attachment IDs');
       const refs=(attachmentIds as string[]).map(id=>{const v=this.store.get<Attachment>('attachment',id);requireValue(v&&v.workspaceId===s.ref.workspaceId,'attachment_mismatch','Attachment is not in this project',403);return v;});
       requireValue(p.text.trim()||refs.length,'empty_input','Input is empty');
-      const w=this.workspace(s.ref.workspaceId);requireValue(await realpath(w.path)===w.path,'workspace_changed','Project identity changed');
+      const w=this.workspace(s.ref.workspaceId,s.ref.engineId);requireValue(await realpath(w.path)===w.path,'workspace_changed','Project identity changed');
       const attachments=await Promise.all(refs.map(async a=>{const bytes=await readProject(w,a.relativePath,MAX_FILE);requireValue(digest(bytes)===a.sha256,'attachment_changed','Uploaded attachment has changed',409);return{...a,dataBase64:bytes.toString('base64')};}));
       const roots=[...w.writeRoots,...(s.grantedRoots||[])];
-      for(const root of roots)requireValue(this.allowedRoots.some(base=>inside(base,root)),'root_not_granted','A previous grant is outside current host-configured workspace roots',403);
+      for(const root of roots)requireValue(this.projects.permits(w,root),'root_not_granted','A previous grant is outside current host-configured workspace roots',403);
       requireValue(!ACTIVE.includes(this.session(s.id).state),'run_active','Wait for native termination or reconciliation before continuing',409);
       await a.prepareSubmission?.(this.session(s.id));
-      this.workspace(s.ref.workspaceId);
+      this.workspace(s.ref.workspaceId,s.ref.engineId);
       requireValue(!this.store.unresolvedCancel(s.id),'cancel_unresolved','Previous cancellation delivery still requires reconciliation',409);
       requireValue(!this.store.unresolvedSubmission(s.id),'submission_unresolved','Previous submission delivery still requires reconciliation',409);
       requireValue(this.session(s.id).binding?.generation===b.generation&&this.session(s.id).binding?.state==='attached','generation_mismatch','Binding changed during submit validation',409);
       for(const other of this.store.list<Session>('session'))if(other.binding?.state!=='unbound'&&(ACTIVE.includes(other.state)||this.store.unresolvedSubmission(other.id))){
-        const ow=this.workspace(other.ref.workspaceId);
-        requireValue(![...ow.writeRoots,...(other.writeRoots||[]),...(other.grantedRoots||[])].some(x=>roots.some(y=>overlaps(x,y))),'directory_busy','A managed task still owns this directory; verify or stop it first',409);
+        requireValue(!this.activeWriteRoots(other).some(x=>roots.some(y=>overlaps(x,y))),'directory_busy','A managed task still owns this directory; verify or stop it first',409);
       }
       this.store.put('active-command',s.id,{device,requestId:c.clientRequestId});
       const run:RunRecord={runId:randomUUID(),sessionId:s.id,generation:b.generation,clientRequestId:c.clientRequestId,deviceId:device,nativeRequestId:randomUUID(),state:'accepted'};
@@ -268,7 +281,7 @@ export class Core extends EventEmitter {
       requireValue(!ACTIVE.includes(s.state),'run_active','Change next-turn model between runs',409);
       requireValue(!this.store.unresolvedSubmission(s.id),'operation_unresolved','Previous native operation requires reconciliation',409);
       const model=object(p.model) as unknown as ModelIdentity;
-      const descriptor=await a.probe();requireValue((a.listModels?await a.listModels(this.workspace(s.ref.workspaceId)):descriptor.models).some(m=>m.providerId===model.providerId&&m.modelId===model.modelId),'model_not_registered','Select an explicitly registered native model');
+      const descriptor=await a.probe();requireValue((a.listModels?await a.listModels(this.workspace(s.ref.workspaceId,s.ref.engineId)):descriptor.models).some(m=>m.providerId===model.providerId&&m.modelId===model.modelId),'model_not_registered','Select an explicitly registered native model');
       this.store.dispatching(device,c.clientRequestId);await a.configure(s,model);const updated=this.session(s.id);updated.nextModel=!updated.model||updated.model.providerId!==model.providerId||updated.model.modelId!==model.modelId?model:undefined;this.store.put('session',s.id,updated);
       this.emit('catalog.changed');
       this.setReceipt(device,{clientRequestId:c.clientRequestId,status:'native_accepted',detail:'Next-turn model requested; character updates only after native confirmation'});
@@ -284,9 +297,10 @@ export class Core extends EventEmitter {
       if(i.form&&!d.cancelled)validateFormAnswer(i.form,object(p.answer));
        const expanded=i.choices.find(choice=>choice.id===d.choiceId)?.allows&&i.writeRoots?.length?await Promise.all(i.writeRoots.map(canonical)):[];
        if(expanded.length){
-         for(const root of expanded)requireValue(this.allowedRoots.some(base=>inside(base,root)),'root_not_granted','Native permission is outside host-configured workspace roots',403);
+         const w=this.workspace(s.ref.workspaceId,s.ref.engineId);
+         for(const root of expanded)requireValue(this.projects.permits(w,root),'root_not_granted','Native permission is outside host-configured workspace roots',403);
          for(const other of this.store.list<Session>('session'))if(other.id!==s.id&&other.binding?.state!=='unbound'&&ACTIVE.includes(other.state)){
-          const w=this.workspace(other.ref.workspaceId);requireValue(!expanded.some(x=>[...w.writeRoots,...(other.writeRoots||[]),...(other.grantedRoots||[])].some(y=>overlaps(x,y))),'directory_busy','Native permission would overlap another active project',409);
+          const occupied=this.activeWriteRoots(other);requireValue(!expanded.some(x=>occupied.some(y=>overlaps(x,y))),'directory_busy','Native permission would overlap another active project',409);
         }
        }
        const latest=this.session(s.id);
@@ -296,7 +310,7 @@ export class Core extends EventEmitter {
        this.workspace(latest.ref.workspaceId);
        const claimed=this.store.claimDecision(s.id,i.id,d.epoch,d);
       if(expanded.length){const current=this.session(s.id);const scope=i.choices.find(choice=>choice.id===d.choiceId)!.scope;
-        if(scope==='allow_always'){const workspace=this.workspace(s.ref.workspaceId);workspace.writeRoots=[...new Set([...workspace.writeRoots,...expanded])];this.store.put('workspace',workspace.id,workspace);}
+        if(scope==='allow_always'){const workspace=this.workspace(s.ref.workspaceId,s.ref.engineId);workspace.writeRoots=[...new Set([...workspace.writeRoots,...expanded])];this.store.put('workspace',workspace.id,workspace);}
         else if(scope==='native:session')current.grantedRoots=[...new Set([...(current.grantedRoots||[]),...expanded])];
         else current.writeRoots=[...new Set([...(current.writeRoots||[]),...expanded])];this.store.put('session',s.id,current);}
       this.context(s.ref.engineId).emit(s.id,'interaction.created',claimed as unknown as Record<string,unknown>);

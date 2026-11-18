@@ -3,13 +3,14 @@ import { promisify } from 'node:util';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { access, chmod, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { hostname, networkInterfaces, platform } from 'node:os';
+import { hostname, homedir, networkInterfaces, platform } from 'node:os';
 import { isIP } from 'node:net';
 import { nativeCommand, readCliVersion, supportsCodexListen } from '../../../packages/adapters/common/command.ts';
 import { checkRuntimePolicy } from '../../../packages/adapters/common/base.ts';
 import { isDevEco } from '../../../packages/adapters/opencode/deveco-service.ts';
 import { nativeEnvironment } from '../../../packages/adapters/common/rpc.ts';
 import type { EngineId } from '../../../packages/protocol/src/types.ts';
+import type { ProjectPolicy } from '../../gateway/src/native-projects.ts';
 import { automationSettings, type AutomationConfig } from '../../gateway/src/automation.ts';
 import { codexEndpoint, type ManagedRuntimeConfig } from './runtime.ts';
 import type { HuaweiPushConfig } from '../../gateway/src/huawei-push.ts';
@@ -26,6 +27,7 @@ export const system = systems[platform() as keyof typeof systems] || systems.lin
 export interface HostConfig {
   hostId: string; name: string; os: string; listen: string; port: number; publicEndpoint: string;
   dataDir: string; caFile: string; certFile: string; keyFile: string;
+  projectPolicy?: ProjectPolicy;
   allowedWorkspaceRoots: string[]; runtimes: Record<EngineId, ManagedRuntimeConfig>;
   automation?: AutomationConfig;
   push?: HuaweiPushConfig;
@@ -33,7 +35,7 @@ export interface HostConfig {
 }
 export interface SetupInput {
   name: string; mode: 'lan' | 'relay'; address: string; publicHost?: string;
-  workspace: string; runtimes: Partial<Record<EngineId, { command: string; enabled: boolean }>>;
+  workspace?: string; projectPolicy?: ProjectPolicy; runtimes: Partial<Record<EngineId, { command: string; enabled: boolean }>>;
   automation?: AutomationConfig;
 }
 const run = promisify(execFile);
@@ -92,20 +94,41 @@ export async function readConfig(root: string): Promise<HostConfig | undefined> 
   try { return JSON.parse(await readFile(join(root, 'host.config.json'), 'utf8')); }
   catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return; throw e; }
 }
+export const defaultCreationRoot = () => join(homedir(), 'AMC Projects');
+export async function normalizePolicy(input: ProjectPolicy, runtimes: SetupInput['runtimes'], previous?: ProjectPolicy): Promise<ProjectPolicy> {
+  if (!input || !Array.isArray(input.syncEngines) || input.syncEngines.some(id => !engines.includes(id))) throw new Error('请选择有效的同步平台。');
+  function paths(value: unknown) {
+    if (!Array.isArray(value) || value.length > 2048 || !value.every(p => typeof p === 'string' && p.length <= 4096 && isAbsolute(p))) throw new Error('项目应使用电脑上的绝对目录路径。');
+    return [...new Set(value as string[])];
+  }
+  const destination = input.creationRoot || defaultCreationRoot();
+  if (!isAbsolute(destination)) throw new Error('新项目保存位置需要绝对路径。');
+  const manualProjects = await Promise.all(paths(input.manualProjects).map(async p => {
+    if (previous?.manualProjects.includes(p)) return p;
+    if (!(await stat(p)).isDirectory()) throw new Error('选择的项目不是目录。');
+    return realpath(p);
+  }));
+  const excludedProjects = paths(input.excludedProjects);
+  if (destination === defaultCreationRoot()) await mkdir(destination, {recursive:true,mode:0o700});
+  if (!(await stat(destination)).isDirectory()) throw new Error('请选择有效的新项目保存位置。');
+  return { creationRoot:await realpath(destination), manualProjects:[...new Set(manualProjects)], excludedProjects,
+    syncEngines:[...new Set(input.syncEngines.filter(id => runtimes[id]?.enabled))] };
+}
 export async function validateInput(input: SetupInput, available = addresses()) {
   if (!input || typeof input.name !== 'string' || !input.name.trim() || input.name.length > 100) throw new Error('电脑名称需为 1–100 个字符。');
   if (!['lan', 'relay'].includes(input.mode)) throw new Error('请选择连接方式。');
   if (!privateIPv4(input.address) || !available.some(a => a.address === input.address)) throw new Error('此 IP 尚未出现在本机网卡上。请连接 Wi-Fi 或启动 EasyTier 后重新检测。');
   if (input.mode === 'relay' && (input.address !== system.address || !validHostname(input.publicHost || ''))) throw new Error(`中转模式需要本机 ${system.address} 地址和有效的中转域名（不含 https:// 或端口）。`);
-  if (typeof input.workspace !== 'string' || !isAbsolute(input.workspace) || !(await stat(input.workspace)).isDirectory()) throw new Error('请选择已存在的项目目录，并使用绝对路径。');
+  if (!input.projectPolicy && (typeof input.workspace !== 'string' || !isAbsolute(input.workspace) || !(await stat(input.workspace)).isDirectory())) throw new Error('请选择已存在的项目目录，并使用绝对路径。');
   if (!input.runtimes || !engines.some(id => input.runtimes[id]?.enabled)) throw new Error('至少启用一个已经安装并登录的 AI 程序。');
-  return realpath(input.workspace);
+  return input.projectPolicy ? undefined : realpath(input.workspace!);
 }
 export async function saveHost(root: string, input: SetupInput) {
   const workspace = await validateInput(input);
   if (input.automation !== undefined) automationSettings(input.automation);
   const ssl = await opensslCommand();
   const previous = await readConfig(root);
+  const projectPolicy = input.projectPolicy ? await normalizePolicy(input.projectPolicy,input.runtimes,previous?.projectPolicy) : previous?.projectPolicy;
   const enabled = await Promise.all(engines.filter(id => input.runtimes[id]?.enabled).map(async id => {
     const result = await probeRuntime(id, input.runtimes[id]!.command);
     if (!result.installed) throw new Error(`${id}：${result.detail}`);
@@ -140,10 +163,13 @@ export async function saveHost(root: string, input: SetupInput) {
   })) as Record<EngineId, ManagedRuntimeConfig>;
   const config: HostConfig = { ...previous, hostId, name: input.name.trim(), os: platform(), listen: input.address, port: 8899,
     publicEndpoint: `https://${target}:${input.mode === 'relay' ? system.publicPort : 8899}`, dataDir: previous?.dataDir ?? root,
-    caFile, certFile, keyFile, allowedWorkspaceRoots: [workspace], runtimes, automation: automationSettings(input.automation ?? previous?.automation),runtimeUpdates:previous?.runtimeUpdates??{enabled:true} };
+    caFile, certFile, keyFile, allowedWorkspaceRoots: workspace ? [workspace] : previous?.allowedWorkspaceRoots ?? [], projectPolicy, runtimes, automation: automationSettings(input.automation ?? previous?.automation),runtimeUpdates:previous?.runtimeUpdates??{enabled:true} };
+  await writeConfig(root, config);
+  return config;
+}
+export async function writeConfig(root:string, config:HostConfig) {
   const temporary = join(root, `config-${randomUUID()}.tmp`);
   await writeFile(temporary, JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   await rename(temporary, join(root, 'host.config.json'));
-  return config;
 }
 export function hostDefaults() { return { name: hostname(), system, platform: platform(), addresses: addresses() }; }

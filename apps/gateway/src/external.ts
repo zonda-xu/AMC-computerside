@@ -4,7 +4,7 @@ import type { ConsoleEvent, EngineId, ExternalCandidate, ExternalPage, ExternalP
 import { ENGINES, NO_CONTROL } from '../../../packages/protocol/src/types.ts';
 import type { ExternalSessionProvider } from '../../../packages/adapters/common/external.ts';
 import { closedProfile } from '../../../packages/adapters/common/external.ts';
-import { canonical, inside } from './files.ts';
+import { canonical } from './files.ts';
 import { digest } from './store.ts';
 import { requireValue, stable } from '../../../packages/protocol/src/validation.ts';
 
@@ -89,7 +89,7 @@ export class ExternalSessions {
     }, false, signal);
   }
   private async discoverPage(workspaceId: string, engineId: EngineId, cursor?: string, signal?: AbortSignal) {
-    const w = this.core.workspace(workspaceId); const p = this.providers.get(engineId);
+    const w = this.core.workspace(workspaceId,engineId); const p = this.providers.get(engineId);
     requireValue(p, 'external_unverified', 'No verified external provider', 409);
     const profile = await externalRead(p.profile(), signal); requireValue(profile.discover.state === 'supported', 'external_unverified', profile.discover.reason, 409);
     requireValue(profile.namespace && profile.profile, 'source_identity', 'Provider has no source identity', 409);
@@ -100,8 +100,8 @@ export class ExternalSessions {
       requireValue(typeof row.nativeId === 'string' && row.nativeId.length > 0 && row.nativeId.length <= 200 && typeof row.title === 'string' && typeof row.cwd === 'string', 'external_format', 'Malformed native candidate');
       const cwd = await canonical(row.cwd).catch(() => '');
       signal?.throwIfAborted();
-      this.core.workspace(workspaceId);
-      if (!cwd || cwd !== w.path || !this.core.allowedRoots.some(root => inside(root, cwd))) continue;
+      this.core.workspace(workspaceId,engineId);
+      if (!cwd || cwd !== w.path) continue;
       const candidateId = digest(stable([this.core.hostId, engineId, profile.namespace, row.nativeId]));
       const c: ExternalCandidate = { candidateId, engineId, workspaceId, title: row.title.slice(0, 160), cwd,
         source: { namespace: profile.namespace, nativeId: row.nativeId, generation: profile.namespace, profile: profile.profile, readOnly: true } };
@@ -110,7 +110,7 @@ export class ExternalSessions {
     }
     const current = await externalRead(p.profile(), signal);
     requireValue(this.providers.get(engineId) === p && current.namespace === profile.namespace && current.profile === profile.profile && current.discover.state === 'supported', 'source_changed', 'External provider changed during discovery', 409);
-    this.core.workspace(workspaceId); signal?.throwIfAborted();
+    this.core.workspace(workspaceId,engineId); signal?.throwIfAborted();
     for (const candidate of items) this.core.store.put('external-candidate-v1', candidate.candidateId, candidate);
     return { items, cursor: page.cursor, candidateCount: page.items.length, identity: stable([profile.namespace, profile.profile]) };
   }
@@ -118,11 +118,11 @@ export class ExternalSessions {
     signal = this.signal(signal); signal.throwIfAborted();
     const c = this.core.store.get<ExternalCandidate>('external-candidate-v1', id);
     requireValue(c, 'candidate_missing', 'Discover this source again', 404);
-    const w = this.core.workspace(c.workspaceId); requireValue(await canonical(c.cwd) === w.path, 'source_changed', 'External project changed', 409);
+    const w = this.core.workspace(c.workspaceId,c.engineId); requireValue(await canonical(c.cwd) === w.path, 'source_changed', 'External project changed', 409);
     const p = this.providers.get(c.engineId); requireValue(p, 'external_unverified', 'External provider unavailable', 409);
     const profile = await externalRead(p.profile(), signal);
     requireValue(profile.history.state === 'supported' && profile.namespace === c.source.namespace && profile.profile === c.source.profile, 'source_changed', 'External source identity or profile changed', 409);
-    this.core.workspace(c.workspaceId);
+    this.core.workspace(c.workspaceId,c.engineId);
     return { c, p };
   }
   async history(id: string, cursor?: string, signal?: AbortSignal): Promise<ExternalPage> {

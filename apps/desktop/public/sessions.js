@@ -12,7 +12,11 @@
   }
   const projectSelection = () => ({workspaceId:el('session-workspace').value,engine:el('library-engine').value});
   const sameProject = target => dialog.open && !el('archived-only').checked && Object.entries(target).every(([key,value])=>projectSelection()[key]===value);
-  const requireProject = target => {if(!target.workspaceId)throw new Error('请先选定项目目录');};
+  const requireProject = target => {
+    if(!target.workspaceId)throw new Error('请先选定项目目录');
+    const project=model.workspaces.find(w=>w.id===target.workspaceId);
+    if(project?.engines && !project.engines.includes(target.engine))throw new Error('此项目未在所选平台共享');
+  };
   async function findNative(target,cursor) {
     requireProject(target);
     const rows=await call({operation:'discover',...target,cursor});
@@ -160,7 +164,7 @@
   };
   for(const id of ['library-engine','session-workspace'])el(id).addEventListener('input',()=>el('native-history').replaceChildren());
   el('save-cage-browser').onclick=async()=>{try{await call({operation:'browser-config',path:el('cage-launch-file').value.trim()});status.textContent='已保存 Cage 浏览器入口';}catch(e){status.textContent=e.message;}};
-  el('register-project').onclick=async()=>{try{await call({operation:'register',name:el('library-project-name').value,path:el('library-project-path').value});await refresh();}catch(e){status.textContent=e.message;}};
+  el('register-project').onclick=async()=>{try{const picked=await api('pick-folder',{});if(!picked.path)return;state=await api('project-settings',{add:picked.path});loadProjectSettings();updateState();await refresh();status.textContent='已添加项目目录';}catch(e){status.textContent=e.message;}};
   el('manage-sessions').onclick=()=>{dialog.showModal();signature='';void refresh().catch(e=>status.textContent=e.message);timer=setInterval(()=>{if(!busy)void refresh().catch(e=>status.textContent=e.message);},4000);};
   dialog.addEventListener('close',()=>{clearInterval(timer);selected.clear();current='';thread.replaceChildren();});
 })();
