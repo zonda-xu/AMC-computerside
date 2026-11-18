@@ -5,7 +5,7 @@ import { CodexAdapter } from './index.ts';
 import { requireValue } from '../../protocol/src/validation.ts';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { relative, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { listCodexThreads, readCodexHistoryPage } from './protocol.ts';
 import { compatibilityProfile } from '../../protocol/src/compatibility.ts';
 
@@ -45,7 +45,7 @@ export class CodexExternalProvider implements ExternalSessionProvider {
     requireValue(profile.discover.state === 'supported', 'external_unverified', profile.discover.reason, 409);
     const rpc = await this.adapter.connection(cwd);
     const r = await listCodexThreads(rpc, 50, cwd, cursor);
-    return { items: r.data.filter(t => relative(cwd, t.cwd) === '').map(t => ({ nativeId: t.id, cwd: t.cwd, title: t.name || t.preview || 'Codex' })), cursor: r.nextCursor || undefined };
+    return { items: r.data.map(t => ({ nativeId: t.id, cwd: t.cwd, title: t.name || t.preview || 'Codex' })), cursor: r.nextCursor || undefined };
   }
   async history(cwd: string, nativeId: string, cursor?: string): Promise<ExternalPage> {
     const profile = await this.profile();

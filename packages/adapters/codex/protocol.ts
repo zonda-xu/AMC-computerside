@@ -1,3 +1,4 @@
+import { codexWorkspaceFilter, sameWorkspacePath } from '../common/workspace-path.ts';
 import type { WebSocketRpc } from '../common/ws-rpc.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -62,20 +63,27 @@ export async function initializeCodex(rpc: WebSocketRpc, expectedHome?: string) 
 
 export interface ListedThread { id: string; cwd: string; preview?: string; name?: string }
 export async function listCodexThreads(rpc: WebSocketRpc, limit: number, cwd?: string, cursor?: string) {
-  const page = await rpc.request<{ data: ListedThread[]; nextCursor?: string | null }>('thread/list',
-    { limit, currentAccountOnly: true, ...(cwd ? { cwd } : {}), ...(cursor ? { cursor } : {}) });
+  const filter = cwd ? codexWorkspaceFilter(cwd) : undefined;
+  const request = (workspaces?: string | string[]) => rpc.request<{ data: ListedThread[]; nextCursor?: string | null }>('thread/list',
+    { limit, currentAccountOnly: true, ...(workspaces ? { cwd: workspaces } : {}), ...(cursor ? { cursor } : {}) });
+  const page = await request(filter).catch(error => {
+    if (!Array.isArray(filter) || error.code !== -32602) throw error;
+    // Older runtimes only accept a single spelling. Page the current account
+    // and enforce the same exact project identity on the returned rows.
+    return request();
+  });
   if (!Array.isArray(page?.data) || page.data.length > limit ||
       page.data.some(thread => typeof thread?.id !== 'string' || !thread.id || typeof thread.cwd !== 'string') ||
       (page.nextCursor != null && typeof page.nextCursor !== 'string')) {
     throw new Error('Codex thread/list 返回的会话列表格式无效');
   }
-  return page;
+  return cwd ? { ...page, data: page.data.filter(thread => sameWorkspacePath(cwd, thread.cwd)) } : page;
 }
 
 export async function readCodexHistoryPage(rpc: WebSocketRpc, threadId: string, cwd: string, cursor?: string) {
   const read = async (includeTurns: boolean) => {
     const result = await rpc.request<CodexThreadSnapshot>('thread/read', { threadId, includeTurns });
-    requireValue(result?.thread?.id === threadId && result.thread.cwd === cwd, 'source_changed', 'Codex native thread cwd or identity changed for the authorized session', 409);
+    requireValue(result?.thread?.id === threadId && sameWorkspacePath(result.thread.cwd, cwd), 'source_changed', 'Codex native thread cwd or identity changed for the authorized session', 409);
     return result;
   };
   const metadata = await read(false);

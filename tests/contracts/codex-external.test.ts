@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { toNamespacedPath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { fixture } from '../helpers.ts';
@@ -29,7 +30,7 @@ test('Codex keeps the same persisted source across versions and negotiates legac
   t.mock.method(rpc, 'request', async (method: string, params: Record<string,unknown>) => {
     calls.push(method);
     if (method === 'thread/list') {
-      if(params.limit===50)assert.deepEqual(params,{cwd:f.w.path,limit:50,currentAccountOnly:true});
+      if(params.limit===50)assert.deepEqual(params,{cwd:process.platform==='win32'?[f.w.path,toNamespacedPath(f.w.path)]:f.w.path,limit:50,currentAccountOnly:true});
       else assert.equal(params.limit,1);
       return { data: [{ id: 'native', cwd: f.w.path, preview: 'Fixture' }], nextCursor: 'opaque-next' };
     }

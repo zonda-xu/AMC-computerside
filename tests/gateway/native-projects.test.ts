@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
-import { join } from 'node:path';
+import { join, toNamespacedPath } from 'node:path';
 import { Core } from '../../apps/gateway/src/core.ts';
 import { effectiveProjectPolicy, type ProjectPolicy } from '../../apps/gateway/src/native-projects.ts';
 import { localProjectDirectories } from '../../apps/gateway/src/local-project-catalog.ts';
@@ -51,8 +51,9 @@ test('offline project discovery reads the selected profiles for all four engines
     const env = { CODEX_HOME: dir, DSH_HOME: dir, CLAUDE_CONFIG_DIR: dir, XDG_DATA_HOME: dir,
       OPENCODE_DB: join(dir,'opencode.db'), DEVECO_DB: join(dir,'deveco.db') };
     await writeFile(join(dir,'.codex-global-state.json'), JSON.stringify({'project-order':[f.w.path]}));
+    const platformCwd = toNamespacedPath(f.wb.path);
     const threads = new DatabaseSync(join(dir,'state_5.sqlite'));
-    try { threads.exec('CREATE TABLE threads (cwd TEXT, archived INTEGER)'); threads.prepare('INSERT INTO threads VALUES (?,0)').run(f.wb.path); } finally { threads.close(); }
+    try { threads.exec('CREATE TABLE threads (cwd TEXT, archived INTEGER)'); threads.prepare('INSERT INTO threads VALUES (?,0)').run(platformCwd); } finally { threads.close(); }
     await mkdir(join(dir,'storages'));
     await writeFile(join(dir,'storages','workspace.json'),JSON.stringify({tables:{workspaces:{first:{path:f.w.path,sessionIds:[]}}}}));
     await writeFile(join(dir,'.claude.json'), JSON.stringify({projects:{[f.w.path]:{}}}));
@@ -68,12 +69,13 @@ test('offline project discovery reads the selected profiles for all four engines
       } finally { db.close(); }
     }
     for (const [engine,command] of [['codex','codex'],['claude-code','claude'],['opencode','opencode'],['opencode','deveco']] as const) {
-      assert.deepEqual((await localProjectDirectories(engine,{command,env})).sort(),[f.w.path,f.wb.path].sort());
+      assert.deepEqual((await localProjectDirectories(engine,{command,env})).sort(),[f.w.path,engine === 'codex' ? platformCwd : f.wb.path].sort());
     }
-    const core = new Core(f.store, f.core.hostId, [], {creationRoot:dir,manualProjects:[],excludedProjects:[],syncEngines:['deepseek-harness']});
+    const core = new Core(f.store, f.core.hostId, [], {creationRoot:dir,manualProjects:[],excludedProjects:[],syncEngines:['deepseek-harness','codex']});
     core.projects.readLocal = engine => localProjectDirectories(engine, {command:'dsh',env});
     await core.projects.refresh();
-    assert.deepEqual(core.workspace(f.w.id).engines,['deepseek-harness']);
+    assert.deepEqual(core.workspace(f.w.id).engines?.sort(),['codex','deepseek-harness']);
+    assert.deepEqual(core.workspace(f.wb.id).engines,['codex']);
     assert.match(core.projects.status.get('deepseek-harness')!,/本机项目/);
   } finally { await f.close(); }
 });

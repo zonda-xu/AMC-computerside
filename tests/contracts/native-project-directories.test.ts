@@ -7,6 +7,35 @@ import type { ClaudeCodeAdapter } from '../../packages/adapters/claude-code/inde
 import { OpenCodeExternalProvider } from '../../packages/adapters/opencode/external.ts';
 import type { OpenCodeAdapter } from '../../packages/adapters/opencode/index.ts';
 import { externalHandlers } from '../../plugins/dsh-bridge/external.mjs';
+import { nativeWorkspacePath } from '../../packages/adapters/common/workspace-path.ts';
+import { listCodexThreads, readCodexHistoryPage } from '../../packages/adapters/codex/protocol.ts';
+import type { WebSocketRpc } from '../../packages/adapters/common/ws-rpc.ts';
+
+test('ordinary Windows extended paths match a project while device and special names stay distinct', () => {
+  assert.equal(nativeWorkspacePath('\\\\?\\D:\\cafe','win32'),'D:\\cafe');
+  assert.equal(nativeWorkspacePath('\\\\?\\UNC\\host\\share\\cafe','win32'),'\\\\host\\share\\cafe');
+  for (const path of ['\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1','\\\\?\\D:\\project.','\\\\?\\D:\\aux']) {
+    assert.equal(nativeWorkspacePath(path,'win32'),path);
+  }
+});
+
+test('Codex can list and read the original Windows thread using both path spellings and a string-only runtime', {skip:process.platform !== 'win32'}, async () => {
+  const cwd = 'D:\\cafe', extended = '\\\\?\\D:\\cafe';
+  for (const legacy of [true,false]) {
+    const rpc = {request: async (method:string,p:{cwd?:unknown;currentAccountOnly?:boolean}) => {
+      if (method === 'thread/read') return {thread:{id:'old',cwd:extended,turns:[]}};
+      assert.equal(p.currentAccountOnly,true);
+      if (p.cwd) {
+        assert.deepEqual(p.cwd,[cwd, extended]);
+        if (legacy) throw Object.assign(new Error('invalid params'),{code:-32602});
+      }
+      return {data:[{id:'old',cwd:extended},{id:'other',cwd:cwd+'-other'}]};
+    }} as unknown as WebSocketRpc;
+    assert.deepEqual((await listCodexThreads(rpc,50,cwd)).data.map(t=>t.id),['old']);
+    assert.equal((await readCodexHistoryPage(rpc,'old',cwd)).snapshot.thread.id,'old');
+    await assert.rejects(readCodexHistoryPage(rpc,'old',cwd+'-other'),/cwd or identity/);
+  }
+});
 
 test('Codex directory discovery pages the current account and Claude SDK omits the project filter',async()=>{
   const codex=new CodexExternalProvider({connection:async()=>({request:async(method:string,params:unknown)=>{

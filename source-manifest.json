@@ -194,8 +194,8 @@
     },
     {
       "path": "apps/gateway/src/native-projects.ts",
-      "bytes": 8821,
-      "sha256": "e20ec849869c6ea8a72f4fb01bb2e123124d77e3732cf7616314a12576ff5cdd"
+      "bytes": 8975,
+      "sha256": "bfede90aebe4c309a6b570a843be2c222bfd247e87eb76a4042e48613c3ab0fe"
     },
     {
       "path": "apps/gateway/src/pair-cli.ts",
@@ -284,8 +284,8 @@
     },
     {
       "path": "docs/DESKTOP_RELEASE.md",
-      "bytes": 1261,
-      "sha256": "e14b7438991599101a22119fee8581fd166df17b8f2f90eb7a1ef9677dce577d"
+      "bytes": 1333,
+      "sha256": "12fee9cd7ea2020ef242d7627ae9c12e4d3865b42c7dad2dbc8a1811cecfdfed"
     },
     {
       "path": "docs/DESKTOP_VALIDATION.md",
@@ -364,18 +364,18 @@
     },
     {
       "path": "packages/adapters/codex/external.ts",
-      "bytes": 5285,
-      "sha256": "ac9ca3f8465da28c3b1d094d0b5ce0678c07bd66895f85c2365da762008b6f5f"
+      "bytes": 5234,
+      "sha256": "0b6729a62a1e317e8b90a917e9ec01a499b65bb4bb12a715cf6bdae7aaf1edac"
     },
     {
       "path": "packages/adapters/codex/index.ts",
-      "bytes": 32456,
-      "sha256": "79ceaba837c0a30c52ade713810366212da7b9bcb3b4867dc27db88d40e28667"
+      "bytes": 32708,
+      "sha256": "a0283563237a017cf65f6df363b02a41235790ac297b3967ee07f4dd16134587"
     },
     {
       "path": "packages/adapters/codex/protocol.ts",
-      "bytes": 6412,
-      "sha256": "e995db41ffb0413e3ee3a6adc07c21bb91ebdd14833998c287abb1f7a5083814"
+      "bytes": 7022,
+      "sha256": "3f8d332d6adfa97b3d13119b93124e575fe7bfe26f994ae003c0defc90bcf067"
     },
     {
       "path": "packages/adapters/common/base.ts",
@@ -406,6 +406,11 @@
       "path": "packages/adapters/common/rpc.ts",
       "bytes": 4054,
       "sha256": "9315d830e651d36554f6e6703baaf0ba9ab9a2194e5fb690c1935732b3ecffe7"
+    },
+    {
+      "path": "packages/adapters/common/workspace-path.ts",
+      "bytes": 1464,
+      "sha256": "cc125b9316489207607161c231a0030cc377ae943c62f51778d9e956c9ca1e27"
     },
     {
       "path": "packages/adapters/common/ws-rpc.ts",
@@ -579,8 +584,8 @@
     },
     {
       "path": "tests/contracts/codex-external.test.ts",
-      "bytes": 5408,
-      "sha256": "0c4ceac70c64c598c74ecdc28cd12c59d76720d1ec5b45e35b7867bcd7ea2006"
+      "bytes": 5520,
+      "sha256": "bde43b5e5a50b5e420391f55eceb8adfcd4d014d8ae94971a76e6a6060d09551"
     },
     {
       "path": "tests/contracts/codex-generated/alpha4.1/source.json",
@@ -724,8 +729,8 @@
     },
     {
       "path": "tests/contracts/native-project-directories.test.ts",
-      "bytes": 3047,
-      "sha256": "945aaf2d6ac482fd29f64918d6f16d0e5cf5b6b94d5e7985fd8130e5420bd083"
+      "bytes": 4810,
+      "sha256": "3a900951be6ba3f46ad8ade8c4d375342b55d13ec4e0f26f922d15e6ac940b01"
     },
     {
       "path": "tests/contracts/offline-fixtures.test.ts",
@@ -879,8 +884,8 @@
     },
     {
       "path": "tests/gateway/native-projects.test.ts",
-      "bytes": 9139,
-      "sha256": "61fae53990185a357743c9ea43dc8c80c7ea1ad4585e5fd877d2f346fb9d890e"
+      "bytes": 9336,
+      "sha256": "0dc9ee7c9e7ab4cf2c397c465861d12eb6ca4001da71be8d40395b1ceb35820b"
     },
     {
       "path": "tests/gateway/protocol-v2.test.ts",

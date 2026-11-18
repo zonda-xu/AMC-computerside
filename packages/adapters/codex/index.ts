@@ -1,3 +1,4 @@
+import { sameWorkspacePath } from '../common/workspace-path.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AgentAdapter, Decision, ExternalCapability, Interaction, ModelIdentity, Session, Submission, Workspace } from '../../protocol/src/types.ts';
 import { AdapterBase, checkRuntimePolicy } from '../common/base.ts';
@@ -42,7 +43,7 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
       const id = example?.id ?? randomUUID();
       try {
         const result = await rpc.request<CodexThreadSnapshot>('thread/read', { threadId: id, includeTurns:false }, 5000);
-        if (example && result?.thread?.id === id && result.thread.cwd === example.cwd) history = supported('thread/read 已返回匹配的会话标识');
+        if (example && result?.thread?.id === id && sameWorkspacePath(result.thread.cwd, example.cwd)) history = supported('thread/read 已返回匹配的会话标识');
       } catch (error) {
         history = !example && /thread .*not found|thread not found|no rollout found|no recorded rollout/i.test(String(error))
           ? supported('thread/read 已处理空目录中的只读查询') : unavailable(String(error));
@@ -113,14 +114,14 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
      // already loaded thread in memory instead of trying to resume its file.
      if(!nativeIdentity&&this.loaded.has(s.id)&&this.submitting.has(s.id)){
        const current=await rpc.request<Native>('thread/read',{threadId:s.ref.nativeSessionId,includeTurns:false});
-       if(this.rpc!==rpc||current.thread?.id!==s.ref.nativeSessionId||current.thread.cwd!==s.cwd)throw new Error('Codex loaded thread identity or authorized cwd changed before submission');
+       if(this.rpc!==rpc||current.thread?.id!==s.ref.nativeSessionId||!sameWorkspacePath(current.thread.cwd,s.cwd))throw new Error('Codex loaded thread identity or authorized cwd changed before submission');
        if(current.thread.status?.type!=='idle')throw new Error('Previous Codex turn is not confirmed idle');
        return;
      }
      if(!nativeIdentity&&this.loaded.has(s.id)&&!this.submitting.has(s.id)&&!ACTIVE.includes(s.state)&&!this.pendingControls(s.id).some(p=>p.command.action==='submit'))return;
      const r=await rpc.request<Native>('thread/resume',{threadId:s.ref.nativeSessionId});if(this.rpc!==rpc||r.thread?.id!==s.ref.nativeSessionId)throw new Error('Codex connection lost or native identity changed during resume');
-     if(typeof r.thread.cwd==='string'&&r.thread.cwd!==s.cwd)throw new Error('Codex native thread cwd does not match the authorized session');
-     if(nativeIdentity&&(this.connectionIdentity!==nativeIdentity||this.config.runtimeIdentity!==nativeIdentity||this.connectionEndpoint!==this.config.endpoint||r.thread.cwd!==s.cwd||!['idle','active'].includes(r.thread.status?.type)||(this.byNative.has(s.ref.nativeSessionId)&&this.byNative.get(s.ref.nativeSessionId)!==s.id)))throw new Error('Codex authorized thread identity, cwd or status changed during attachment');
+     if(typeof r.thread.cwd==='string'&&!sameWorkspacePath(r.thread.cwd,s.cwd))throw new Error('Codex native thread cwd does not match the authorized session');
+     if(nativeIdentity&&(this.connectionIdentity!==nativeIdentity||this.config.runtimeIdentity!==nativeIdentity||this.connectionEndpoint!==this.config.endpoint||!sameWorkspacePath(r.thread.cwd,s.cwd)||!['idle','active'].includes(r.thread.status?.type)||(this.byNative.has(s.ref.nativeSessionId)&&this.byNative.get(s.ref.nativeSessionId)!==s.id)))throw new Error('Codex authorized thread identity, cwd or status changed during attachment');
      this.byNative.set(s.ref.nativeSessionId,s.id);this.loaded.add(s.id);this.attachSession(s,this.control,this.config.runtimeIdentity);
     if(typeof r.modelProvider==='string'&&r.modelProvider&&typeof r.model==='string'&&r.model)this.context.emit(s.id,'model.confirmed',{model:{providerId:r.modelProvider,modelId:r.model,label:r.model}});
       for(const turn of r.thread.turns || [])for(const item of turn.items || []){if(item.type==='userMessage'&&typeof turn.id==='string'&&turn.id&&typeof item.id==='string')this.acceptSubmission(s.id,item.id,turn.id);this.mapItem(s.id,item,turn.id,true,true);}
@@ -160,7 +161,7 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
        cursor = page.cursor;
      }
      if(this.rpc!==rpc||this.config.runtimeIdentity!==nativeIdentity||this.connectionIdentity!==nativeIdentity||this.config.endpoint!==endpoint||this.connectionEndpoint!==endpoint)throw new Error('Codex registered app-server connection changed during verification');
-     if(read.thread?.id!==s.ref.nativeSessionId||read.thread.cwd!==s.cwd)throw new Error('Codex native thread cwd or identity does not match the authorized session');
+     if(read.thread?.id!==s.ref.nativeSessionId||!sameWorkspacePath(read.thread.cwd,s.cwd))throw new Error('Codex native thread cwd or identity does not match the authorized session');
      if(!['idle','active','notLoaded'].includes(read.thread.status?.type))throw new Error('Codex saved thread is not available for verified resume');
      if(!Array.isArray(read.thread.turns)||read.thread.turns.some(turn=>typeof turn.id!=='string'||!turn.id||!Array.isArray(turn.items)))throw new Error('Codex native thread history is incomplete');
      return read;
@@ -194,11 +195,11 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     await this.resumeSession(s);
     const rpc=await this.connection(s.cwd);
     const before=await rpc.request<Native>('thread/read',{threadId:s.ref.nativeSessionId,includeTurns:false});
-    if(this.rpc!==rpc||before.thread?.id!==s.ref.nativeSessionId||before.thread.cwd!==s.cwd||before.thread.status?.type!=='idle')throw new Error('Codex thread identity, cwd or idle state changed before model selection');
+    if(this.rpc!==rpc||before.thread?.id!==s.ref.nativeSessionId||!sameWorkspacePath(before.thread.cwd,s.cwd)||before.thread.status?.type!=='idle')throw new Error('Codex thread identity, cwd or idle state changed before model selection');
     if(before.thread.modelProvider!==model.providerId)throw new Error('Codex native thread provider changed; select a model for the confirmed provider');
     await rpc.request('thread/settings/update',{threadId:s.ref.nativeSessionId,model:model.modelId});
     const after=await rpc.request<Native>('thread/read',{threadId:s.ref.nativeSessionId,includeTurns:false});
-    if(this.rpc!==rpc||after.thread?.id!==s.ref.nativeSessionId||after.thread.cwd!==s.cwd||after.thread.modelProvider!==model.providerId||after.thread.model!==model.modelId)throw new Error('Codex model setting was not confirmed by the native thread; reconcile before retrying');
+    if(this.rpc!==rpc||after.thread?.id!==s.ref.nativeSessionId||!sameWorkspacePath(after.thread.cwd,s.cwd)||after.thread.modelProvider!==model.providerId||after.thread.model!==model.modelId)throw new Error('Codex model setting was not confirmed by the native thread; reconcile before retrying');
     this.context.emit(s.id,'model.confirmed',{model:{providerId:after.thread.modelProvider,modelId:after.thread.model,label:model.label}});
   }
   completion(turn:Native):Completion{return{state:turn.status==='interrupted'?'cancelled':turn.status==='failed'?'failed':turn.status==='completed'?'completed':'uncertain',reason:turn.status,...(turn.error?{error:turn.error}:{})};}
@@ -252,7 +253,7 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     const emit=(type:any,data:Native)=>this.context.emit(id,type,data);
     if(m.method==='thread/settings/updated'){
       const settings=p.threadSettings;const s=this.context.getSession(id);
-      if(settings?.cwd===s.cwd&&typeof settings.model==='string'&&settings.model&&typeof settings.modelProvider==='string'&&settings.modelProvider&&(!s.model||s.model.providerId===settings.modelProvider))emit('model.confirmed',{model:{providerId:settings.modelProvider,modelId:settings.model,label:settings.model}});
+      if(settings && sameWorkspacePath(settings.cwd,s.cwd)&&typeof settings.model==='string'&&settings.model&&typeof settings.modelProvider==='string'&&settings.modelProvider&&(!s.model||s.model.providerId===settings.modelProvider))emit('model.confirmed',{model:{providerId:settings.modelProvider,modelId:settings.model,label:settings.model}});
       return;
     }
     if(m.method==='item/agentMessage/delta')emit('message.delta',{id:this.messageId(id,p.itemId,p.turnId),text:p.delta,role:'assistant',nativeRunId:p.turnId});
@@ -300,7 +301,7 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     if (this.byNative.get(native) !== s.id) return;
     const rpc = await this.connection(s.cwd);
     const info = (await rpc.request<Native>('thread/read',{threadId:native,includeTurns:false})).thread;
-    if (info?.id !== native || info.cwd !== s.cwd || !['idle','notLoaded'].includes(info.status?.type)) throw new Error('Codex 会话仍在运行或目录已改变');
+    if (info?.id !== native || !sameWorkspacePath(info.cwd, s.cwd) || !['idle','notLoaded'].includes(info.status?.type)) throw new Error('Codex 会话仍在运行或目录已改变');
     await rpc.request('thread/unsubscribe',{threadId:native});
     this.loaded.delete(s.id); this.byNative.delete(native);
     this.context.disconnect?.([s.id],'已归档，恢复后可重新连接');
@@ -313,7 +314,7 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     const absent = (e: unknown) => /thread not found|no rollout found|thread .* not found/i.test(String(e));
     try {
       const info = (await read()).thread;
-      if (info?.id !== native || info.cwd !== s.cwd || !['idle','notLoaded'].includes(info.status?.type)) throw new Error('Codex 尚未确认原会话空闲');
+      if (info?.id !== native || !sameWorkspacePath(info.cwd, s.cwd) || !['idle','notLoaded'].includes(info.status?.type)) throw new Error('Codex 尚未确认原会话空闲');
     } catch (e) { if (s.deletionPending && absent(e)) return async () => {}; throw e; }
     return async () => {
       if (this.rpc !== rpc || this.connectionIdentity !== identity) throw new Error('Codex 连接已改变');

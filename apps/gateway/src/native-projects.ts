@@ -2,6 +2,7 @@ import { basename, isAbsolute, parse, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { nativeWorkspacePath } from '../../../packages/adapters/common/workspace-path.ts';
 import type { Core } from './core.ts';
 import { inside } from './files.ts';
 import { directoryIdentity } from './workspace-identity.ts';
@@ -29,8 +30,8 @@ export function effectiveProjectPolicy(config: {
 }
 interface ProjectSource { path: string; engines: EngineId[]; created?: boolean }
 const sourceTable = 'workspace-origins-v1';
-const pathKey = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
-const samePath = (a: string, b: string) => relative(a, b) === '';
+const pathKey = (path: string) => process.platform === 'win32' ? resolve(nativeWorkspacePath(path)).toLowerCase() : resolve(path);
+const samePath = (a: string, b: string) => relative(nativeWorkspacePath(a), nativeWorkspacePath(b)) === '';
 
 export class NativeProjects {
   readonly core: Core;
