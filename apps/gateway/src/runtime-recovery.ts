@@ -21,7 +21,7 @@ export class RuntimeRecovery {
   private async recover(): Promise<void> {
     for (const session of this.core.store.list<Session>('session')) {
       if (this.stopped) return;
-      if (session.binding?.state !== 'disconnected') { this.retries.delete(session.id); continue; }
+      if (session.archived || session.deletionPending || session.binding?.state !== 'disconnected') { this.retries.delete(session.id); continue; }
       const retry = this.retries.get(session.id);
       if (retry && retry.after > Date.now()) continue;
       try { await this.core.reconcile(session.id); this.retries.delete(session.id); }

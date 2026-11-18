@@ -59,8 +59,8 @@ export class ExternalSessions {
   async close() { this.stop.abort(new Error('External sessions stopped')); await Promise.all([...this.locks.values()]); }
   private signal(signal?: AbortSignal) { return signal ? AbortSignal.any([signal, this.stop.signal]) : this.stop.signal; }
   constructor(core: Core) { this.core = core; }
-  async capabilities(): Promise<ExternalProfile[]> {
-    return Promise.all(ENGINES.map(async engine => {
+  async capabilities(selected?: EngineId): Promise<ExternalProfile[]> {
+    return Promise.all(ENGINES.filter(engine => !selected || engine === selected).map(async engine => {
       const provider = this.providers.get(engine);
       try { if (provider) return await provider.profile(); }
       catch { return closedProfile(engine, '', 'Provider unavailable; no native sessions were read'); }
@@ -95,6 +95,7 @@ export class ExternalSessions {
     requireValue(profile.namespace && profile.profile, 'source_identity', 'Provider has no source identity', 409);
     const page = await externalRead(p.discover(w.path, cursor), signal); const items: ExternalCandidate[] = [];
     requireValue(page.items.length <= 100, 'external_budget', 'Discovery exceeds page budget');
+    const sessions = this.core.store.list<Session>('session');
     for (const row of page.items) {
       requireValue(typeof row.nativeId === 'string' && row.nativeId.length > 0 && row.nativeId.length <= 200 && typeof row.title === 'string' && typeof row.cwd === 'string', 'external_format', 'Malformed native candidate');
       const cwd = await canonical(row.cwd).catch(() => '');
@@ -104,6 +105,7 @@ export class ExternalSessions {
       const candidateId = digest(stable([this.core.hostId, engineId, profile.namespace, row.nativeId]));
       const c: ExternalCandidate = { candidateId, engineId, workspaceId, title: row.title.slice(0, 160), cwd,
         source: { namespace: profile.namespace, nativeId: row.nativeId, generation: profile.namespace, profile: profile.profile, readOnly: true } };
+      c.registeredSessionId = this.registeredSession(c, sessions)?.id;
       items.push(c);
     }
     const current = await externalRead(p.profile(), signal);
@@ -129,6 +131,10 @@ export class ExternalSessions {
     const page = await externalRead(p.history(c.cwd, c.source.nativeId, cursor), signal);
     requireValue(page.items.length <= 5000 && Buffer.byteLength(JSON.stringify(page)) <= 4 * 1024 * 1024, 'external_budget', 'History exceeds read budget');
     for (const m of page.items) requireValue(typeof m.nativeEventId === 'string' && m.nativeEventId.length > 0 && m.nativeEventId.length <= 400 && ['user', 'assistant', 'reasoning'].includes(m.role) && typeof m.text === 'string' && m.text.length <= 100000, 'external_format', 'Malformed historical message');
+    requireValue(!page.tools || Array.isArray(page.tools) && page.tools.length<=5000 && page.tools.every(t=>
+      typeof t.id==='string' && !!t.id && t.id.length<=400 && typeof t.status==='string' && t.status.length<=64 &&
+      (t.title===undefined || typeof t.title==='string' && t.title.length<=500) &&
+      (t.detail===undefined || typeof t.detail==='string' && t.detail.length<=8192)), 'external_format','Malformed historical tool record');
     const current = await this.candidate(id, signal);
     requireValue(current.p === p && stable(current.c.source) === stable(c.source) && current.c.workspaceId === c.workspaceId, 'source_changed', 'External provider changed during history read', 409);
     return page;
@@ -142,7 +148,19 @@ export class ExternalSessions {
     signal = this.signal(signal);
     const { c } = await this.candidate(id, signal); signal?.throwIfAborted(); return this.importCandidate(c);
   }
+  private registeredSession(c: ExternalCandidate, sessions = this.core.store.list<Session>('session')): Session | undefined {
+    const runtime = this.core.context(c.engineId).runtimeInstanceId;
+    const matches = sessions.filter(s =>
+      s.ref.hostId === this.core.hostId && s.ref.workspaceId === c.workspaceId && s.cwd === c.cwd
+      && s.ref.engineId === c.engineId && s.ref.nativeSessionId === c.source.nativeId);
+    // Prefer the durable owner even while its gateway connection is restarting.
+    return matches.find(s => s.ref.runtimeInstanceId === runtime && !!s.binding?.nativeIdentity &&
+      s.binding.state !== 'unbound' && (!s.externalSource || s.externalSource.namespace === c.source.namespace))
+      ?? matches.find(s => s.externalSource?.namespace === c.source.namespace);
+  }
   private importCandidate(c: ExternalCandidate): Session {
+    const existing = this.registeredSession(c);
+    if (existing) return existing;
     const id = c.candidateId;
     const previous = this.core.store.get<{ sessionId: string }>('external-import-v1', id);
     if (previous) return this.core.session(previous.sessionId);
@@ -187,6 +205,9 @@ export class ExternalSessions {
     const candidate = this.core.store.get<ExternalCandidate>('external-candidate-v1', id);
     requireValue(candidate && stable(candidate.source) === stable(s.externalSource) && candidate.workspaceId === s.ref.workspaceId, 'source_changed', 'Projection source identity or profile changed', 409);
     const page = await this.history(id, cursor, signal); signal?.throwIfAborted(); validate?.(page);
+    const latest=this.core.session(sessionId);
+    requireValue(!latest.archived && !latest.deletionPending && (!latest.binding || latest.binding.state==='unbound'),
+      'source_changed','会话归属或归档状态已变化',409);
     const silentBaseline = !this.core.store.get('external-baseline-v1', sessionId);
     for (const m of page.items) {
       const key = digest(stable([id, m.nativeEventId])); const hash = digest(stable(m));
@@ -199,6 +220,15 @@ export class ExternalSessions {
         return e;
       });
       if (event) this.core.emit('event', event);
+    }
+    const tools = new Map(latest.tools.map(t=>[t.id,t]));
+    for (const t of page.tools || []) {
+      const previous=tools.get(t.id);
+      if(previous && ['completed','failed','cancelled'].includes(previous.status) && ['running','uncertain'].includes(t.status)) continue;
+      const next={id:t.id,title:t.title || previous?.title || '工具调用',status:t.status,detail:t.detail || previous?.detail || ''};
+      if(previous?.title===next.title && previous.status===next.status && previous.detail===next.detail) continue;
+      const event=this.core.store.event(s.id,'tool.updated',{...next,historical:true},false);
+      tools.set(t.id,next); this.core.emit('event',event);
     }
     this.core.store.put('external-checkpoint-v1', s.id, { cursor: page.cursor, refreshedAt: Date.now() });
     return { snapshot: this.core.session(s.id), cursor: page.cursor };

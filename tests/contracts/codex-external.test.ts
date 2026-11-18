@@ -28,7 +28,7 @@ test('Codex 0.169 external reads use thread/read turns without legacy pagination
   t.mock.method(adapter, 'connection', async () => rpc);
   t.mock.method(rpc, 'request', async (method: string, params: object) => {
     calls.push(method);
-    if (method === 'thread/list') { assert.deepEqual(params,{cwd:f.w.path,cursor:undefined,limit:50,useStateDbOnly:true});return { data: [{ id: 'native', cwd: f.w.path, preview: 'Fixture' }], nextCursor: 'opaque-next' }; }
+    if (method === 'thread/list') { assert.deepEqual(params,{cwd:f.w.path,cursor:undefined,limit:50,currentAccountOnly:true});return { data: [{ id: 'native', cwd: f.w.path, preview: 'Fixture' }], nextCursor: 'opaque-next' }; }
     assert.equal(method,'thread/read');assert.deepEqual(params,{threadId:'native',includeTurns:true});
     return { thread: { id: 'native', cwd: changed ? f.wb.path : f.w.path, turns: [{ id: 'turn', status: 'completed', items: view==='full'?[
       { type: 'userMessage', id: 'user', content: [{ type: 'text', text: 'Fixture prompt' }] },

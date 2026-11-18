@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
-import type { ExternalMessage, ExternalProfile } from '../../protocol/src/types.ts';
+import type { ExternalMessage, ExternalProfile, ExternalTool } from '../../protocol/src/types.ts';
 import type { DiscoveryPage, ExternalSessionProvider } from '../common/external.ts';
 import { closedProfile } from '../common/external.ts';
 import { requireValue } from '../../protocol/src/validation.ts';
@@ -37,8 +37,23 @@ export class ClaudeExternalProvider implements ExternalSessionProvider {
     requireValue(info&&typeof info.cwd==='string'&&await realpath(info.cwd).catch(()=>'')===cwd,'source_changed','Claude session/workspace mismatch',409);
     const offset=cursor?Number(cursor):0;requireValue(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'external_cursor','Invalid message cursor');
     const messages=await sdk.getSessionMessages(nativeId,{dir:cwd,limit:100,offset});requireValue(Array.isArray(messages)&&messages.length<=100,'external_format','Invalid Claude transcript page');
-    const items:ExternalMessage[]=[];
-    for(const m of messages){requireValue(m.session_id===nativeId&&typeof m.uuid==='string','source_changed','Claude transcript identity mismatch',409);if(!['user','assistant'].includes(m.type)||m.parent_tool_use_id)continue;const content=m.message?.content;const text=typeof content==='string'?content:Array.isArray(content)?content.filter((c:any)=>c.type==='text'&&typeof c.text==='string').map((c:any)=>c.text).join('\n'):'';if(text)items.push({nativeEventId:m.uuid,role:m.type,text});}
-    return{items,cursor:messages.length===100?String(offset+100):undefined};
+    const items:ExternalMessage[]=[]; const tools:ExternalTool[]=[];
+    for(const m of messages){
+      requireValue(m.session_id===nativeId && typeof m.uuid==='string','source_changed','Claude transcript identity mismatch',409);
+      if(!['user','assistant'].includes(m.type)) continue;
+      const content=m.message?.content;
+      if(Array.isArray(content)) for(const block of content){
+        if(block.type==='tool_use' && typeof block.id==='string'){
+          tools.push({id:block.id,title:String(block.name||'工具调用').slice(0,500),status:'running',detail:JSON.stringify(block.input||{}).slice(0,8192)});
+        } else if(block.type==='tool_result' && typeof block.tool_use_id==='string'){
+          const result=typeof block.content==='string'?block.content:Array.isArray(block.content)?block.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('\n'):'';
+          tools.push({id:block.tool_use_id,status:block.is_error?'failed':'completed',detail:result.slice(0,8192)});
+        }
+      }
+      if(m.parent_tool_use_id) continue;
+      const text=typeof content==='string'?content:Array.isArray(content)?content.filter((c:any)=>c.type==='text'&&typeof c.text==='string').map((c:any)=>c.text).join('\n'):'';
+      if(text)items.push({nativeEventId:m.uuid,role:m.type,text});
+    }
+    return{items,...(tools.length?{tools}:{}),cursor:messages.length===100?String(offset+100):undefined};
   }
 }

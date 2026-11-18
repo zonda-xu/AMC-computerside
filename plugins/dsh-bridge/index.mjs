@@ -1,6 +1,8 @@
 import WebSocket from 'ws';
-import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { readFile, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { externalHandlers } from './external.mjs';
 import { controllerEvidence } from './profile.mjs';
 import { controllerBridge } from './controller.mjs';
@@ -13,6 +15,8 @@ export default async function activate(ctx, config = {}) {
   const token = (await readFile(config.tokenFile, 'utf8')).trim();
   const evidence = await controllerEvidence(ctl, ctx, config);
   const instanceId = randomUUID();
+  const home = await realpath(process.env.DSH_HOME || join(homedir(),'.dsh')).catch(()=>undefined);
+  const historyNamespace = home ? 'dsh-store:'+createHash('sha256').update(home).digest('hex') : undefined;
   const observed = new Set();
   const handlers = externalHandlers(ctl, observed, instanceId);
   let ws; let retry; let stopped = false; let delay = 250;
@@ -30,7 +34,7 @@ export default async function activate(ctx, config = {}) {
       try {
         message = JSON.parse(raw.toString());
         let result;
-        if (message.method === 'probe') result = { ...evidence, externalProtocol: 2, instanceId, pluginInstanceId:instanceId, control:!!bridge };
+        if (message.method === 'probe') result = { ...evidence, externalProtocol: 2, instanceId, historyNamespace, pluginInstanceId:instanceId, control:!!bridge };
         else {
           if (!evidence.apiProfile) throw new Error(evidence.detail);
           const handler = Object.hasOwn(handlers, message.method) ? handlers[message.method] : bridge&&Object.hasOwn(bridge.handlers,message.method)?bridge.handlers[message.method]:undefined;

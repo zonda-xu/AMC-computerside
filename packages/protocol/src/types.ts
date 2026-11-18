@@ -7,6 +7,7 @@ export const TERMINAL: RunState[] = ['completed', 'failed', 'cancelled'];
 export interface ControlCapabilities { create: boolean; submit: boolean; observe: boolean; approve: boolean; answer: boolean; cancel: boolean; resume: boolean; configure?: boolean; attach?: boolean; slash?:boolean; steer?:boolean }
 export const NO_CONTROL: ControlCapabilities = {create:false,submit:false,observe:false,approve:false,answer:false,cancel:false,resume:false};
 export interface RuntimeBinding {
+  accountScope?: string; historyNamespace?: string;
   runtimeInstanceId: string; generation: number; nativeSessionId: string;
   state: 'attached' | 'disconnected' | 'unbound'; capabilities: ControlCapabilities; reason?: string; nativeIdentity?: string;
 }
@@ -23,9 +24,10 @@ export interface ExternalProfile {
   continueManaged: ExternalCapability; submit: ExternalCapability; approve: ExternalCapability;
   answer: ExternalCapability; cancel: ExternalCapability; configure: ExternalCapability; stopVerification: ExternalCapability;
 }
-export interface ExternalCandidate { candidateId: string; engineId: EngineId; workspaceId: string; title: string; cwd: string; source: ExternalSource }
+export interface ExternalCandidate { registeredSessionId?: string; candidateId: string; engineId: EngineId; workspaceId: string; title: string; cwd: string; source: ExternalSource }
 export interface ExternalMessage { nativeEventId: string; role: 'user' | 'assistant' | 'reasoning'; text: string }
-export interface ExternalPage { items: ExternalMessage[]; cursor?: string }
+export interface ExternalTool { id:string; title?:string; status:string; detail?:string }
+export interface ExternalPage { items: ExternalMessage[]; tools?: ExternalTool[]; cursor?: string }
 export interface Message { id: string; role: 'user' | 'assistant' | 'reasoning'; text: string; complete: boolean; model?: ModelIdentity; startSeq?:number; runId?:string; nativeKey?:string; temporary?:boolean; abandoned?:boolean; attemptId?:string; revision?:number }
 export interface ToolState { runId?:string; id: string; title: string; status: string; detail: string }
 export interface AgentState { runId?: string; id: string; title: string; state: string; detail: string }
@@ -43,6 +45,7 @@ export interface Interaction {
 export interface FormField { key:string; type:'string'|'number'|'integer'|'boolean'|'multiselect'|'external'; title?:string; description?:string; required?:boolean; hidden?:boolean; options?:Array<{value:string;label:string;description?:string}>; minLength?:number; maxLength?:number; pattern?:string; minimum?:number; maximum?:number; minItems?:number; maxItems?:number; custom?:boolean; when?:Array<{key:string;op:'eq'|'neq';value:string|number|boolean}>; [key:string]:unknown }
 export interface Attachment { id: string; workspaceId: string; name: string; relativePath: string; mime: string; bytes: number; sha256: string }
 export interface Session {
+  archived?: boolean; pinned?: boolean; deletionPending?: boolean; catalogRevision?: number;
   id: string; ref: SessionRef; title: string; cwd: string; state: RunState; epoch: number;
   model?: ModelIdentity; nextModel?: ModelIdentity; runId?: string;
   messages: Message[]; tools: ToolState[]; agents: AgentState[]; interactions: Interaction[];
@@ -97,5 +100,7 @@ export interface AgentAdapter {
   configure(session: Session, model: ModelIdentity): Promise<void>;
   listNativeCommands?(session:Session):Promise<{commands:unknown[]}>;
   executeNativeCommand?(session:Session,line:string,input:Submission):Promise<unknown>;
+  releaseSession?(session: Session): Promise<void>;
+  prepareDelete?(session: Session): Promise<() => Promise<void>>;
   close(): void;
 }

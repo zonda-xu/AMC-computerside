@@ -37,7 +37,7 @@ export class StdioRpc extends EventEmitter {
 export function nativeEnvironment(engine: string, extra: Record<string,string>={}):NodeJS.ProcessEnv {
   const env:NodeJS.ProcessEnv={};
   const common=['PATH','Path','HOME','USERPROFILE','APPDATA','LOCALAPPDATA','XDG_CONFIG_HOME','XDG_DATA_HOME','XDG_STATE_HOME','TMPDIR','TMP','TEMP','SystemRoot','COMSPEC','SHELL','LANG','LC_ALL','SSH_AUTH_SOCK','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy','SSL_CERT_FILE','NODE_EXTRA_CA_CERTS'];
-  const auth:Record<string,string[]>={codex:['CODEX_HOME','OPENAI_API_KEY','OPENAI_BASE_URL'],'claude-code':['CLAUDE_CONFIG_DIR','ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','AWS_PROFILE','AWS_REGION','GOOGLE_APPLICATION_CREDENTIALS'],'opencode':['OPENCODE_CONFIG','OPENCODE_CONFIG_DIR']};
+  const auth:Record<string,string[]>={codex:['CODEX_HOME','OPENAI_API_KEY','OPENAI_BASE_URL'],'claude-code':['CLAUDE_CONFIG_DIR','ANTHROPIC_API_KEY','ANTHROPIC_BASE_URL','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_VERTEX','AWS_PROFILE','AWS_REGION','GOOGLE_APPLICATION_CREDENTIALS'],'opencode':['OPENCODE_CONFIG','OPENCODE_CONFIG_DIR','DEVECO_CONFIG','DEVECO_CONFIG_DIR','DEVECO_HOME','DEVECO_SDK_HOME']};
   for(const k of [...common,...(auth[engine]||[])])if(process.env[k]!==undefined)env[k]=process.env[k];
   return {...env,...extra};
 }

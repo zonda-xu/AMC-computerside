@@ -106,7 +106,7 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
      const read=await rpc.request<CodexThreadSnapshot>('thread/read',{threadId:s.ref.nativeSessionId,includeTurns:true});
      if(this.rpc!==rpc||this.config.runtimeIdentity!==nativeIdentity||this.connectionIdentity!==nativeIdentity||this.config.endpoint!==endpoint||this.connectionEndpoint!==endpoint)throw new Error('Codex registered app-server connection changed during verification');
      if(read.thread?.id!==s.ref.nativeSessionId||read.thread.cwd!==s.cwd)throw new Error('Codex native thread cwd or identity does not match the authorized session');
-     if(!['idle','active'].includes(read.thread.status?.type))throw new Error('Codex native thread is not confirmed loaded and available');
+     if(!['idle','active','notLoaded'].includes(read.thread.status?.type))throw new Error('Codex saved thread is not available for verified resume');
      if(!Array.isArray(read.thread.turns)||read.thread.turns.some(turn=>typeof turn.id!=='string'||!turn.id||!Array.isArray(turn.items)))throw new Error('Codex native thread history is incomplete');
      return read;
    }
@@ -216,5 +216,31 @@ export class CodexAdapter extends AdapterBase implements AgentAdapter {
     if(m.method==='error')emit('error',{message:p.error?.message||JSON.stringify(p)});
   }
   async probe(){const result=await super.probe();if(!result.installed||result.version!=='codex-cli 0.169.0'||result.version!==this.config.expectedVersion){result.detail='Codex control unavailable: exact configured and installed codex-cli 0.169.0 is required; protocol target is unverified';return result;}try{await this.connection('');result.installed=true;result.controlCapabilities=this.control;result.generation=this.epoch;result.connectionState='attached';result.nativeIdentity=this.config.runtimeIdentity;result.detail='Connected to configured shared app-server at exact target version; authentication and model execution require native validation';result.capabilities={text:true,image:false,files:false,history:true,permission:true,questions:true,cancelScope:'thread + turn',models:true};try{result.models=await this.listModels();}catch(error){result.capabilities.models=false;result.detail+='; model catalog unavailable: '+String(error);}}catch(e){result.detail=e instanceof Error?e.message:String(e);}return result;}
+  async releaseSession(s: Session) {
+    const native = s.ref.nativeSessionId;
+    if (this.byNative.get(native) !== s.id) return;
+    const rpc = await this.connection(s.cwd);
+    const info = (await rpc.request<Native>('thread/read',{threadId:native,includeTurns:false})).thread;
+    if (info?.id !== native || info.cwd !== s.cwd || !['idle','notLoaded'].includes(info.status?.type)) throw new Error('Codex 会话仍在运行或目录已改变');
+    await rpc.request('thread/unsubscribe',{threadId:native});
+    this.loaded.delete(s.id); this.byNative.delete(native);
+    this.context.disconnect?.([s.id],'已归档，恢复后可重新连接');
+  }
+  async prepareDelete(s: Session) {
+    const native = s.ref.nativeSessionId, identity = this.config.runtimeIdentity;
+    if (!identity || s.binding?.nativeIdentity && s.binding.nativeIdentity !== identity) throw new Error('Codex 注册实例已改变');
+    const rpc = await this.connection(s.cwd);
+    const read = () => rpc.request<Native>('thread/read',{threadId:native,includeTurns:false});
+    const absent = (e: unknown) => /thread not found|no rollout found|thread .* not found/i.test(String(e));
+    try {
+      const info = (await read()).thread;
+      if (info?.id !== native || info.cwd !== s.cwd || !['idle','notLoaded'].includes(info.status?.type)) throw new Error('Codex 尚未确认原会话空闲');
+    } catch (e) { if (s.deletionPending && absent(e)) return async () => {}; throw e; }
+    return async () => {
+      if (this.rpc !== rpc || this.connectionIdentity !== identity) throw new Error('Codex 连接已改变');
+      await rpc.request('thread/delete',{threadId:native});
+      this.loaded.delete(s.id); this.byNative.delete(native);
+    };
+  }
     close(){this.closed=true;const rpc=this.rpc;this.rpc=undefined;this.loaded.clear();this.clearApprovals();rpc?.close();}
 }

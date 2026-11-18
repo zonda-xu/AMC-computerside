@@ -192,5 +192,31 @@ export class OpenCodeAdapter extends AdapterBase implements AgentAdapter {
     p.responding=true;try{await this.http(this.path(s.ref.nativeSessionId,`/${p.kind==='permission'?'permission':'form'}/${encodeURIComponent(String(i.nativeId))}/reply`),'POST',body);this.pending.delete(key);this.context.emit(s.id,'interaction.closed',{id:i.id});}catch(e){p.responding=false;throw e;}
   }
   async probe(){const result=await super.probe();if(!result.installed||result.version!==this.config.expectedVersion||!/^(?:opencode )?2\.3\.0$/.test(result.version)){result.detail='OpenCode control unavailable: exact configured and installed CLI 2.3.0 is required';return result;}try{await this.connection();await this.http('/api/session?limit=1');result.installed=true;result.controlCapabilities=this.control;result.generation=this.epoch;result.connectionState='attached';result.nativeIdentity=this.endpoint?.identity||this.endpoint?.url;result.detail='Connected to discovered v2 HTTP and SSE service; model authentication requires execution validation';result.capabilities={text:true,image:false,files:false,history:true,permission:true,questions:true,cancelScope:'session current execution; no atomic turn comparison',models:true};try{result.models=await this.listModels();}catch(error){result.capabilities.models=false;result.detail+='; model catalog unavailable: '+String(error);}}catch(e){result.detail=e instanceof Error?e.message:String(e);}return result;}
+  async releaseSession(s: Session) {
+    await this.connection();
+    const native=s.ref.nativeSessionId;
+    if(this.byNative.get(native)!==s.id)return;
+    const info=(await this.http(this.path(native))).data;
+    if(info?.id!==native || info.location?.directory!==s.cwd || info.time?.busy && (!info.time?.idle||info.time.busy>info.time.idle)) throw new Error('OpenCode 会话状态已改变');
+    this.loaded.delete(s.id); this.byNative.delete(native);
+    this.context.disconnect?.([s.id],'会话已归档');
+  }
+  async prepareDelete(s: Session) {
+    await this.connection();
+    const endpoint=this.endpoint, identity=endpoint?.identity||endpoint?.url;
+    if(!identity || s.binding?.nativeIdentity && s.binding.nativeIdentity!==identity || s.externalSource && s.externalSource.namespace!==this.context.runtimeInstanceId+':'+identity) throw new Error('OpenCode 服务身份与历史不符');
+    const native=s.ref.nativeSessionId, path=this.path(native);
+    let info: Native;
+    try { info=(await this.http(path)).data; }
+    catch(e){if(s.deletionPending && String(e).endsWith('HTTP 404'))return async()=>{};throw e;}
+    if(info?.id!==native||info.location?.directory!==s.cwd||!Number.isFinite(info.time?.created) || info.time.busy && (!info.time.idle || info.time.busy>info.time.idle))throw new Error('OpenCode 未确认会话身份或空闲状态');
+    return async()=>{
+      if(this.endpoint!==endpoint)throw new Error('OpenCode 服务连接已改变');
+      await this.http(path,'DELETE');
+      try {await this.http(path);}
+      catch(e){if(String(e).endsWith('HTTP 404')){this.byNative.delete(native);this.loaded.delete(s.id);return;}throw e;}
+      throw new Error('OpenCode 仍能找到原会话，请核对后重试');
+    };
+  }
   close(){this.closed=true;this.controller?.abort();this.controller=undefined;this.endpoint=undefined;}
 }

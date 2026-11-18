@@ -7,6 +7,7 @@ import { requireValue } from '../../protocol/src/validation.ts';
 export class DshExternalProvider implements ExternalSessionProvider {
   engineId: 'deepseek-harness' = 'deepseek-harness';
   adapter: DshAdapter;
+  private peer?:string;
   constructor(adapter: DshAdapter) { this.adapter = adapter; }
   async profile(): Promise<ExternalProfile> {
     if (this.adapter.config.enabled === false) return closedProfile(this.engineId, '', 'DSH runtime disabled');
@@ -19,14 +20,16 @@ export class DshExternalProvider implements ExternalSessionProvider {
       const reason=pinned&&r.version!==this.adapter.config.expectedVersion?'DSH controller does not match expectedVersion':r.detail||'DSH compatible controller and bridge protocol 2 evidence required';
       p.discover={state:'unverified',reason};p.history=p.discover;p.observe=p.discover;return p;
     }
-    p.profile = r.apiProfile; p.namespace = r.instanceId;
+    this.peer = r.instanceId;
+    p.profile = r.apiProfile;
+    p.namespace = typeof r.historyNamespace==='string' && /^dsh-store:[a-f0-9]{64}$/.test(r.historyNamespace) ? r.historyNamespace : r.instanceId;
     p.coverage = 'durable user text, assistant text and reasoning; append-only journal view, including attempts; no attachments or historical approvals'; p.syncMode = 'manual-refresh';
     p.discover = { state: 'supported', reason: 'Same plugin host only; bounded immutable discovery snapshot pages' };
     p.history = { state: 'supported', reason: 'Controller projections waterline and validated page traversal; no follow/state/resume/claim; unavailable or migration-required waterlines fail closed' };
     p.observe = { state: 'supported', reason: 'Manual durable history refresh; not native interactive control' };
     return p;
   }
-  private async instance(): Promise<string> { const p = await this.profile(); requireValue(p.history.state === 'supported', 'external_unverified', 'DSH external protocol or version mismatch', 409); return p.namespace; }
+  private async instance(): Promise<string> { const p = await this.profile(); requireValue(p.history.state === 'supported', 'external_unverified', 'DSH external protocol or version mismatch', 409); return this.peer!; }
   async discover(cwd: string, cursor?: string): Promise<DiscoveryPage> {
     const r = await this.adapter.call('externalList', { cwd, cursor, instanceId: await this.instance() });
     requireValue(Array.isArray(r.items) && r.items.length <= 50, 'external_format', 'Malformed DSH list');
@@ -36,6 +39,6 @@ export class DshExternalProvider implements ExternalSessionProvider {
     requireValue(!cursor, 'cursor_invalid', 'DSH refresh is a bounded complete journal snapshot');
     const r = await this.adapter.call('externalHistory', { cwd, sessionId: nativeId, instanceId: await this.instance() });
     requireValue(Array.isArray(r.items), 'external_format', 'Malformed DSH history');
-    return { items: r.items };
+    return { items: r.items, ...(r.tools ? {tools:r.tools} : {}) };
   }
 }

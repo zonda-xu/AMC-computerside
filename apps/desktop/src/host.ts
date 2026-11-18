@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { hostname, networkInterfaces, platform } from 'node:os';
 import { isIP } from 'node:net';
 import { nativeCommand } from '../../../packages/adapters/common/command.ts';
+import { isDevEco } from '../../../packages/adapters/opencode/deveco-service.ts';
 import { nativeEnvironment } from '../../../packages/adapters/common/rpc.ts';
 import type { EngineId } from '../../../packages/protocol/src/types.ts';
 import { automationSettings, type AutomationConfig } from '../../gateway/src/automation.ts';
@@ -81,7 +82,9 @@ export async function probeRuntime(engine: EngineId, command: string) {
     if (engine === 'codex') detail = version === 'codex-cli 0.169.0'
       ? '目标版本匹配；共享 app-server 需显式启动/登记，版本输出不代表已接管原生会话。'
       : '目标为 codex-cli 0.169.0；当前版本不匹配，不能启动共享控制运行时。';
-    if (engine === 'opencode') detail = '目标为 client/CLI 2.3.0；普通探测只做 discover，不会 ensure 或替换现有服务。';
+    if (engine === 'opencode') detail = isDevEco(command)
+      ? '已找到 DevEco Code。启动运行时后，可在手机 OpenCode 分区查看本机项目的会话并继续点单。'
+      : '目标为 client/CLI 2.3.0；普通探测只做 discover，不会 ensure 或替换现有服务。';
     if (engine === 'deepseek-harness') detail = 'CLI 版本不代表控制能力；以同宿主 bridge/controller 握手及实际能力为准。';
     return { engine, command: command.trim(), installed: true, version, detail };
   } catch {

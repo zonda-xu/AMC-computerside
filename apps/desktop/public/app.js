@@ -12,7 +12,7 @@ const probeResults = new Map();
 const nextLabels = ['继续，选择连接方式 →', '继续，接入 AI 终端 →', '保存配置，进入配对 →', '查看已配对设备 →', '返回配对页面'];
 function notice(message = '', info = false) { $('#notice').textContent = message; $('#notice').classList.toggle('info', info); $('#notice').hidden = !message; }
 async function api(path, data) {
-  const response = await fetch('/v2/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(path === 'save' ? 120000 : 25000) });
+  const response = await fetch('/v2/' + path, { method: data === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, ...(data === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout(['save','session-library'].includes(path) ? 125000 : 25000) });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '操作没有完成，请重试。');
   return result;

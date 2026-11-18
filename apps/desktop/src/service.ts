@@ -7,6 +7,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import QRCode from 'qrcode';
+import { Core } from '../../gateway/src/core.ts';
+import { desktopCatalog } from '../../gateway/src/desktop-catalog.ts';
+import { canonical } from '../../gateway/src/files.ts';
 import { Store, digest } from '../../gateway/src/store.ts';
 import { addresses, commands, engines, hostDefaults, opensslCommand, readConfig, saveHost, system, validHostname, type HostConfig, type SetupInput } from './host.ts';
 import { probeRuntime } from './host.ts';
@@ -133,10 +136,35 @@ export class DesktopService {
     this.child?.send({ type: 'revoke', id });
     return { revoked: true };
   }
+  async sessions(input: Record<string,unknown>) {
+    const child=this.child;
+    if (child?.connected && this.ready) {
+      const requestId=randomBytes(16).toString('hex');
+      return new Promise<unknown>((resolve,reject)=>{
+        const cleanup=()=>{clearTimeout(timer);child.off('message',onMessage);child.off('exit',onExit);};
+        const onExit=()=>{cleanup();reject(new Error('网关连接中断，请核对原请求'));};
+        const onMessage=(value:unknown)=>{
+          const m=value as {type?:string;requestId?:string;data?:unknown;error?:string};
+          if (m?.type!=='session-library-result'||m.requestId!==requestId) return;
+          cleanup(); if (m.error) reject(new Error(m.error)); else resolve(m.data);
+        };
+        const timer=setTimeout(onExit,120000);
+        child.on('message',onMessage);child.once('exit',onExit);
+        child.send({type:'session-library',requestId,input},error=>{if(error)onExit();});
+      });
+    }
+    const config=await this.config(); if (!config) throw new Error('请先保存主机配置');
+    const store=new Store(join(config.dataDir,'console.sqlite'));
+    try {
+      const core=new Core(store,config.hostId,await Promise.all(config.allowedWorkspaceRoots.map(canonical)));
+      return await desktopCatalog(core,input,false);
+    } finally { store.close(); }
+  }
   async api(path: string, method: string, input: any) {
     if (path === '/v2/state' && method === 'GET') return this.state();
     if (method !== 'POST') throw new Error('不支持的请求。');
     switch (path) {
+      case '/v2/session-library': return this.sessions(input);
       case '/v2/check': {
         let openssl = ''; try { openssl = await opensslCommand(); } catch { /* Return an actionable missing dependency. */ }
         return { node: process.versions.node, openssl, addresses: addresses(), commands };
@@ -187,7 +215,7 @@ export class DesktopService {
         } catch (error) { res.writeHead(400).end(JSON.stringify({ error: (error as Error).message })); }
         return;
       }
-      const assets: Record<string, [string, string]> = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+      const assets: Record<string, [string, string]> = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/sessions.js': ['sessions.js','text/javascript'], '/style.css': ['style.css', 'text/css'] };
       const asset = assets[path]; if (!asset || req.method !== 'GET') { res.writeHead(404).end(); return; }
       res.setHeader('Content-Type', asset[1] + '; charset=utf-8');
       try { res.end(await readFile(join(publicDir, asset[0]))); } catch { res.writeHead(500).end('界面文件缺失，请重新解压完整电脑端分发包。'); }

@@ -173,13 +173,24 @@ test('Codex authorized adoption verifies native cwd, runtime registration and ac
   assert.equal(f.rpc.calls.some(call => ['thread/start', 'turn/start'].includes(call.method)), false);
 });
 
+test('an unloaded saved Codex thread resumes on its original ID and must become available', async t => {
+  const f = harness(t);
+  f.rpc.snapshot.thread.status.type = 'notLoaded';
+  await assert.rejects(f.adapter.attachExistingSession(f.session, 'registered-server'), /status changed/);
+  assert.equal(f.session.binding, undefined);
+  f.rpc.beforeReply = method => { if (method === 'thread/resume') f.rpc.snapshot.thread.status.type = 'idle'; };
+  await f.adapter.attachExistingSession(f.session, 'registered-server');
+  assert.ok(f.rpc.calls.filter(call => call.method.startsWith('thread/')).every(call => call.params.threadId === 'native'));
+  assert.equal(f.rpc.calls.some(call => call.method === 'turn/start' || call.method === 'thread/start'), false);
+});
+
 test('Codex adoption rejects changed cwd, thread, status, ownership and app-server identity before attach', async t => {
   const f = harness(t);
   await assert.rejects(f.adapter.attachExistingSession(f.session, 'other-server'), /identity mismatch/);
   assert.equal(f.rpc.calls.length, 0);
-  for (const status of ['notLoaded', 'systemError', 'unexpected']) {
+  for (const status of ['systemError', 'unexpected']) {
     f.rpc.snapshot.thread.status.type = status;
-    await assert.rejects(f.adapter.attachExistingSession(f.session, 'registered-server'), /not confirmed loaded/);
+    await assert.rejects(f.adapter.attachExistingSession(f.session, 'registered-server'), /not available for verified resume/);
   }
   f.rpc.snapshot.thread.status.type = 'idle';
   f.rpc.snapshot.thread.cwd += '-not-authorized';

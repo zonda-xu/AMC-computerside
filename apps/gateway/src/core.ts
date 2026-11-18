@@ -4,6 +4,7 @@ import { realpath } from 'node:fs/promises';
 import type { AdapterContext, AgentAdapter, Attachment, Command, Decision, EngineId, ModelIdentity, Receipt, Session, Workspace, RuntimeBinding, RunRecord } from '../../../packages/protocol/src/types.ts';
 import { ACTIVE, ENGINES, NO_CONTROL, TERMINAL } from '../../../packages/protocol/src/types.ts';
 import { exactRef, object, requireValue, validateCommand, validateFormAnswer } from '../../../packages/protocol/src/validation.ts';
+import { editCatalog, type LibraryChange } from './session-library.ts';
 import { Store, digest } from './store.ts';
 import { canonical, inside, overlaps, readProject, MAX_FILE } from './files.ts';
 import { WorkspaceCreator } from './workspace-create.ts';
@@ -72,13 +73,16 @@ export class Core extends EventEmitter {
     requireValue((binding.runtimeInstanceId===s.ref.runtimeInstanceId||adopting)&&binding.nativeSessionId===s.ref.nativeSessionId&&Number.isSafeInteger(binding.generation)&&binding.generation>=s.epoch,'binding_mismatch','Binding does not match registered session identity',409);
     this.workspace(s.ref.workspaceId);if(adopting)s.ref={...s.ref,runtimeInstanceId:binding.runtimeInstanceId};
     if(binding.generation!==(s.binding?.generation??s.epoch))s.interactions=s.interactions.map(i=>i.status==='resolved'?i:{...i,status:'stale'});
-    s.binding=binding;s.epoch=binding.generation;this.store.put('session',id,s);this.emit('catalog.changed');
+    s.binding=binding;s.epoch=binding.generation;this.store.put('session',id,s);
+    if(adopting)this.emit('session.bound',s);
+    this.emit('catalog.changed');
   }
   setReceipt(device:string,receipt:Receipt){this.store.receipt(device,receipt);this.emit('receipt',{device,receipt:this.store.getReceipt(device,receipt.clientRequestId)??receipt});}
   async reconcile(id:string){
     const previous=(this.queues.get(id)??Promise.resolve()).catch(()=>{});
     const work=previous.then(async()=>{
       const s=this.session(id);this.workspace(s.ref.workspaceId);
+      requireValue(!s.archived && !s.deletionPending,'session_archived','请先恢复归档会话',409);
       requireValue(s.binding&&s.binding.state!=='unbound','binding_unavailable','Read-only history has no runtime binding',409);
       const a=this.adapters.get(s.ref.engineId);requireValue(a,'runtime_missing','Runtime adapter unavailable',409);
       try {
@@ -106,6 +110,7 @@ export class Core extends EventEmitter {
     const previous=Promise.all([this.queues.get(id),this.queues.get(key)].map(p=>p?.catch(()=>{})));
     const work=previous.then(async()=>{
       const s=this.session(id);this.workspace(s.ref.workspaceId);
+      requireValue(!s.archived && !s.deletionPending,'session_archived','请先恢复归档会话',409);
       requireValue(exactRef(ref,s.ref),'target_mismatch','Attachment source identity changed',409);
       requireValue(s.externalSource&&s.binding&&s.binding.state!=='attached','binding_exists','Only unbound or disconnected history requires explicit attachment',409);
       const runtime=this.context(s.ref.engineId);
@@ -189,10 +194,19 @@ export class Core extends EventEmitter {
     this.queues.set(s.id,work);void work.finally(()=>{if(this.queues.get(s.id)===work)this.queues.delete(s.id);});
     this.inFlight.add(work);void work.finally(()=>this.inFlight.delete(work));return r.receipt;
   }
+  async editSession(id: string, change: LibraryChange) {
+    const previous = this.queues.get(id) ?? Promise.resolve();
+    const result = previous.catch(() => {}).then(() => editCatalog(this, id, change));
+    const work = result.then(() => {}, () => {});
+    this.queues.set(id, work); this.inFlight.add(work);
+    try { return await result; }
+    finally { this.inFlight.delete(work); if (this.queues.get(id) === work) this.queues.delete(id); }
+  }
   async drain(){await Promise.all([...this.inFlight]);}
   async execute(device:string,c:Command){
     const s=this.session(c.sessionId);const a=this.adapters.get(s.ref.engineId);const p=c.payload;
     requireValue(a,'runtime_missing','Runtime adapter unavailable',409);requireValue(c.hostId===this.hostId&&exactRef(c.ref,s.ref),'target_mismatch','Session identity changed',409);this.workspace(s.ref.workspaceId);
+    requireValue(!s.archived && !s.deletionPending,'session_archived','请先从归档恢复会话',409);
     const b=s.binding;requireValue(b?.state==='attached','binding_unavailable',b?.reason??'No native control binding',409);
     requireValue(p.expectedGeneration===b.generation,'generation_mismatch','Command targets an obsolete runtime generation',409);
     const capability=c.action==='decide'?(s.interactions.find(i=>i.id===p.interactionId)?.kind==='permission'?'approve':'answer'):c.action;

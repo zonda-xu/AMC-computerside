@@ -14,6 +14,8 @@ import { ClaudeCodeAdapter } from '../../../packages/adapters/claude-code/index.
 import { ClaudeExternalProvider } from '../../../packages/adapters/claude-code/external.ts';
 import { OpenCodeAdapter } from '../../../packages/adapters/opencode/index.ts';
 import { OpenCodeExternalProvider } from '../../../packages/adapters/opencode/external.ts';
+import { DevEcoCodeAdapter, DevEcoExternalProvider } from '../../../packages/adapters/opencode/deveco.ts';
+import { isDevEco } from '../../../packages/adapters/opencode/deveco-service.ts';
 import { DshAdapter } from '../../../packages/adapters/deepseek-harness/index.ts';
 import { DshExternalProvider } from '../../../packages/adapters/deepseek-harness/external.ts';
 import type { RuntimeConfig } from '../../../packages/adapters/common/base.ts';
@@ -24,6 +26,7 @@ import { ExternalSync } from './external-sync.ts';
 import { PushCoordinator } from './push.ts';
 import { HuaweiPushTransport, type HuaweiPushConfig } from './huawei-push.ts';
 import { RuntimeManager } from '../../desktop/src/runtime.ts';
+import { desktopCatalog } from './desktop-catalog.ts';
 import { RuntimeRecovery } from './runtime-recovery.ts';
 import { RuntimeUpdateMonitor, type RuntimeUpdateConfig } from './runtime-updates.ts';
 export interface HostConfig { hostId:string;name:string;os:string;listen:string;port:number;publicEndpoint:string;dataDir:string;caFile:string;certFile:string;keyFile:string;allowedWorkspaceRoots:string[];runtimes:Record<EngineId,RuntimeConfig>;automation?:AutomationConfig;push?:HuaweiPushConfig;runtimeUpdates?:RuntimeUpdateConfig }
@@ -46,8 +49,10 @@ const codex=new CodexAdapter('codex',c.runtimes.codex,core.context('codex'));cor
 core.external.providers.set('codex',new CodexExternalProvider(codex));
 const claude=new ClaudeCodeAdapter('claude-code',c.runtimes['claude-code'],core.context('claude-code'));
 core.adapters.set('claude-code',claude);core.external.providers.set('claude-code',new ClaudeExternalProvider(claude));
-const opencode=new OpenCodeAdapter('opencode',c.runtimes.opencode,core.context('opencode'));core.adapters.set('opencode',opencode);
-core.external.providers.set('opencode',new OpenCodeExternalProvider(opencode));
+const openConfig=c.runtimes.opencode,openContext=core.context('opencode');
+const opencode=isDevEco(openConfig.command)?new DevEcoCodeAdapter(openConfig,openContext,c.dataDir):new OpenCodeAdapter('opencode',openConfig,openContext);
+core.adapters.set('opencode',opencode);
+core.external.providers.set('opencode',opencode instanceof DevEcoCodeAdapter?new DevEcoExternalProvider(opencode):new OpenCodeExternalProvider(opencode));
 const dsh=new DshAdapter('deepseek-harness',c.runtimes['deepseek-harness'],core.context('deepseek-harness'));core.adapters.set('deepseek-harness',dsh);
 core.external.providers.set('deepseek-harness',new DshExternalProvider(dsh));
 const discovery=new WorkspaceDiscovery(core,automation);const externalSync=new ExternalSync(core,automation,c.runtimes);
@@ -67,6 +72,12 @@ let stopping=false;
 async function shutdown(code=0){if(stopping)return;stopping=true;server.close();bridgeHTTP.close();bridgeWS.close();runtimeUpdates.stop();await Promise.all([discovery.close(),externalSync.close(),core.external.close(),push.stop(),runtimeRecovery.close()]);for(const a of core.adapters.values())a.close();await core.drain();await unlink(lockPath).catch(()=>{});store.close();process.exit(code);}
 const listen=(server:import('node:net').Server,port:number,address:string)=>new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(port,address,resolve);});
 try{await Promise.all([listen(bridgeHTTP,8898,'127.0.0.1'),listen(server,c.port,c.listen)]);discovery.start();externalSync.start();push.start();runtimeRecovery.start();runtimeUpdates.start();console.log(`AI Maid Café: ${c.name} (${c.hostId}) — ${c.listen}:${c.port}`);process.send?.({type:'ready'});}catch(e){console.error((e as Error).message);await shutdown(1);}
+process.on('message',(message: {type?:string; requestId?:string; input?:Record<string,unknown>})=>{
+  if(message?.type !== 'session-library' || !message.requestId || !message.input) return;
+  void desktopCatalog(core,message.input,true).then(
+    data=>process.send?.({type:'session-library-result',requestId:message.requestId,data}),
+    error=>process.send?.({type:'session-library-result',requestId:message.requestId,error:error instanceof Error?error.message:'会话操作失败'}));
+});
 process.on('message',message=>{const m=message as {type?:string;id?:string};if(m.type==='shutdown')void shutdown();if(m.type==='revoke'&&m.id)core.emit('device-revoked',m.id);});
 if(process.send)process.once('disconnect',()=>void shutdown());
 process.once('SIGINT',()=>void shutdown());process.once('SIGTERM',()=>void shutdown());

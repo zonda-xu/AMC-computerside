@@ -1,6 +1,9 @@
 import { createServer, type ServerOptions } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
+import { CageBrowser, validatePublicLink } from './browser-link.ts';
+import { readMedia } from './media.ts';
+import type { LibraryChange } from './session-library.ts';
 import { Core } from './core.ts';
 import { Fault, object, requireValue, string, validateWorkspaceCreate } from '../../../packages/protocol/src/validation.ts';
 import { MAX_FILE, listProject, projectDiff, readProject, upload } from './files.ts';
@@ -17,6 +20,7 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
   const envelope=(data:unknown)=>({protocolVersion:2,hostId:core.hostId,data});
   function send(ws:WebSocket,value:unknown){if(ws.readyState!==WebSocket.OPEN)return;if(ws.bufferedAmount>1024*1024){ws.close(1013,'Reconnect for snapshot');return;}ws.send(JSON.stringify(envelope(value)));}
   function auth(req:IncomingMessage){requireValue(req.headers['x-amc-host']===core.hostId,'host_mismatch','Wrong host identity',409);return core.store.authenticate(req.headers.authorization?.replace(/^Bearer /,'')||'');}
+  const cageBrowser=new CageBrowser();
   const server=createServer(tls,async(req,res)=>{
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Content-Type','application/json; charset=utf-8');
     const reply=(data:unknown,status=200)=>{res.writeHead(status);res.end(JSON.stringify(envelope(data)));};
@@ -28,8 +32,25 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
         const p=await jsonBody(req,32_768);requireValue(p.hostId===core.hostId,'host_mismatch','Pairing targets another host',409);reply({...core.store.redeem(string(p.ticket,'ticket',200),string(p.deviceName,'deviceName',100)),...about});return;
       }
       const device=auth(req);
+      const library = path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/catalog$/);
+      if (library && req.method === 'POST') {
+        const p = await jsonBody(req, 4096);
+        reply(await core.editSession(library[1], p as unknown as LibraryChange)); return;
+      }
+      const browser = path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/browser-link$/);
+      if (browser && req.method==='POST') {
+        const s=core.session(browser[1]); core.workspace(s.ref.workspaceId);
+        const input=await jsonBody(req,8192); const link=string(input.url,'url',4096);
+        requireValue(s.messages.some(m=>m.role==='assistant' && m.id===input.messageId && m.text.includes(link)), 'unknown_link','链接不属于该条会话消息',400);
+        const launch = core.store.get<{path:string}>('host-preference','cage-browser')?.path || process.env.AMC_CAGE_LAUNCH_FILE;
+        reply(await cageBrowser.open(launch,await validatePublicLink(link))); return;
+      }
       const artifactsPath=path.match(/^\/v2\/sessions\/([A-Za-z0-9-]+)\/artifacts$/);
       if(artifactsPath&&req.method==='GET'){const session=core.session(artifactsPath[1]);const workspace=core.workspace(session.ref.workspaceId);reply({sessionId:session.id,runId:session.runId,items:await sessionArtifacts(session,workspace)});return;}
+      const media = path.match(/^\/v2\/workspaces\/([A-Za-z0-9-]+)\/media$/);
+      if (media && req.method === 'GET') {
+        reply(await readMedia(core.workspace(media[1]),url.searchParams.get('path')||'',Number(url.searchParams.get('offset')||0),url.searchParams.get('revision')||undefined)); return;
+      }
       const previewPath=path.match(/^\/v2\/workspaces\/([A-Za-z0-9-]+)\/preview$/);
       if(previewPath&&req.method==='GET'){reply(await previewProject(core.workspace(previewPath[1]),url.searchParams.get('path')||''));return;}
       const modelsPath=path.match(/^\/v2\/workspaces\/([A-Za-z0-9-]+)\/models$/);
@@ -52,7 +73,7 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       if(path==='/v2/workspaces/create'&&req.method==='POST'){const p=await jsonBody(req,32_768);requireValue(validateWorkspaceCreate(p),'invalid_field','Invalid directory creation request');reply(await core.workspaceCreator.create(device,p.clientRequestId,p.rootId,p.directoryName,p.name));return;}
       const directoryOperation=path.match(/^\/v2\/workspace-operations\/([A-Za-z0-9_.:-]+)$/);
       if(directoryOperation&&req.method==='GET'){reply(core.workspaceCreator.status(device,directoryOperation[1]));return;}
-      if(path==='/v2/external-capabilities'&&req.method==='GET'){reply({items:await core.external.capabilities()});return;}
+      if(path==='/v2/external-capabilities'&&req.method==='GET'){const engine=url.searchParams.get('engineId') as EngineId | null;reply({items:await core.external.capabilities(engine || undefined)});return;}
       if(path==='/v2/external-sessions'&&req.method==='GET'){const engineId=url.searchParams.get('engineId');requireValue(engineId==='codex'||engineId==='claude-code'||engineId==='opencode'||engineId==='deepseek-harness','engine_invalid','Unknown external engine');reply(await core.external.discover(string(url.searchParams.get('workspaceId'),'workspaceId'),engineId,url.searchParams.get('cursor')||undefined));return;}
       const external=path.match(/^\/v2\/external-sessions\/([a-f0-9]{64})\/(history|import)$/);
       if(external&&external[2]==='history'&&req.method==='GET'){reply(await core.external.history(external[1],url.searchParams.get('cursor')||undefined));return;}
@@ -107,6 +128,11 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
       for(const s of sessions){core.workspace(s.ref.workspaceId);if(cursors)requireValue(Number.isSafeInteger(cursors[s.id])&&(cursors[s.id] as number)>=0&&(cursors[s.id] as number)<=s.watermark,'cursor_invalid','Invalid session replay cursor');}
       p.sessions=new Set(sessions.map((s:Session)=>s.id));
       for(const s of sessions){
+        // A discovery ref and its verified writer have different runtime identities.
+        // A sequence cursor alone cannot tell us which identity the phone last saw.
+        if(s.externalSource && s.ref.runtimeInstanceId!==s.externalSource.namespace){
+          send(ws,{type:'snapshot',snapshot:snapshotWindow(s)});continue;
+        }
         if(cursors){let after=cursors[s.id] as number;while(after<s.watermark&&ws.readyState===WebSocket.OPEN){const events=core.store.events(s.id,after);requireValue(events.length>0,'replay_gap','Persisted replay gap');for(const event of events){send(ws,{type:'event',event});after=event.seq;}}}
         else send(ws,{type:'snapshot',snapshot:snapshotWindow(s)});
       }
@@ -122,6 +148,14 @@ export function makeServer(core:Core,tls:ServerOptions,about:{name:string;os:str
     }
   };
   const onReceipt=({device,receipt}:any)=>{for(const[ws,p]of peers)if(p.device===device)send(ws,{type:'receipt',receipt});};
+  const onBound=(s:Session)=>{
+    for(const [ws,peer] of peers)if(peer.sessions.has(s.id)){
+      try{core.workspace(s.ref.workspaceId);send(ws,{type:'snapshot',snapshot:snapshotWindow(s)});}
+      catch{peer.sessions.delete(s.id);ws.close(1008,'Workspace authorization changed');}
+    }
+  };
+  core.on('session.bound',onBound);
+  server.once('close',()=>core.off('session.bound',onBound));
   core.on('event',onEvent);core.on('receipt',onReceipt);
   const onCatalog=()=>{for(const ws of peers.keys())send(ws,{type:'catalog.changed'});};
   core.on('catalog.changed',onCatalog);

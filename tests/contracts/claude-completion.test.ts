@@ -14,6 +14,7 @@ function harness(){
   const options:Frame[]=[];
   let interrupt:()=>Promise<Frame|undefined>=async()=>({still_queued:[]});
   adapter.checkVersion=async()=>{};
+  adapter.readScope = async () => 'fixture-account-and-route';
   adapter.loadSdk=async()=>({query:(args:{prompt:InputQueue<Frame>;options:Frame})=>{
     const output=new InputQueue<Frame>();outputs.push(output);inputs.push(args.prompt);options.push(args.options);
     output.push({type:'system',subtype:'init',session_id:'native'});
@@ -36,6 +37,17 @@ function pending(f:ReturnType<typeof harness>,action:'submit'|'cancel'='submit')
   f.context.reconcileReceipt=(device,id,evidence)=>{assert.equal(device,'device');assert.equal(id,'command');settlements.push(evidence);Object.assign(receipt,evidence);};
   return{command,receipt,run,settlements};
 }
+
+test('continuing a Claude session rechecks the account and route before delivering input', async () => {
+  const f=harness();
+  try{
+    const created=await f.adapter.createSession(f.session.id,f.workspace);f.session.binding=created.binding;
+    await f.submit('first');f.result('first');
+    f.adapter.readScope=async()=>'different-route';
+    await assert.rejects(f.submit('second'),/账户、项目或服务地址已变化/);
+    assert.equal(f.inputs[0].items.length,1);
+  }finally{f.close();}
+});
 
 test('synthetic SDK keeps one Query across two rounds, then resumes the same session after normal completion',async()=>{
   const f=harness();try{

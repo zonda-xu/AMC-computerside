@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { access } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { realpath } from 'node:fs/promises';
+import { accountScope, transcriptRemoval } from './origin.ts';
 import type { AgentAdapter, Decision, Interaction, ModelIdentity, Session, Submission, Workspace } from '../../protocol/src/types.ts';
 import { ACTIVE } from '../../protocol/src/types.ts';
 import { AdapterBase } from '../common/base.ts';
@@ -17,7 +20,7 @@ export class InputQueue<T> implements AsyncIterable<T> {
   close(){this.ended=true;for(const waiter of this.waiters.splice(0))waiter({done:true,value:undefined});}
   [Symbol.asyncIterator]():AsyncIterator<T>{return{next:()=>{if(this.items.length)return Promise.resolve({done:false as const,value:this.items.shift()!});if(this.ended)return Promise.resolve({done:true as const,value:undefined});return new Promise(resolve=>this.waiters.push(resolve));}};}
 }
-interface Live { model?:ModelIdentity; identity:string; generation?:number; query:Native; input:InputQueue<Native>; pending:Map<string,{input:Native;toolUseID:string;finish:(result:Native,stale?:boolean)=>boolean}>; active:boolean; stopping:boolean; attached:boolean; accepted?:boolean; cancelPending?:boolean; cancelUncertain?:boolean; nativeId?:string; requestId?:string; streams:Map<string,{messageId:string;blocks:Map<number,string>}>; completed:Set<string>; results:Set<string>; finishedTools:Set<string>; ready:Promise<string>; initialized:(id:string)=>void; rejectInit:(error:Error)=>void; consumer?:Promise<void> }
+interface Live { firstTurn?:boolean; scope?:string; model?:ModelIdentity; identity:string; generation?:number; query:Native; input:InputQueue<Native>; pending:Map<string,{input:Native;toolUseID:string;finish:(result:Native,stale?:boolean)=>boolean}>; active:boolean; stopping:boolean; attached:boolean; accepted?:boolean; cancelPending?:boolean; cancelUncertain?:boolean; nativeId?:string; requestId?:string; streams:Map<string,{messageId:string;blocks:Map<number,string>}>; completed:Set<string>; results:Set<string>; finishedTools:Set<string>; ready:Promise<string>; initialized:(id:string)=>void; rejectInit:(error:Error)=>void; consumer?:Promise<void> }
 export class ClaudeCodeAdapter extends AdapterBase implements AgentAdapter {
   async listModels(workspace?:Workspace):Promise<ModelIdentity[]>{return this.cachedModels(workspace?.path||'',()=>this.readModelCatalog(workspace));}
   async readModelCatalog(workspace?:Workspace):Promise<ModelIdentity[]>{
@@ -40,8 +43,19 @@ export class ClaudeCodeAdapter extends AdapterBase implements AgentAdapter {
   async loadSdk(){const module=this.config.sdkModule||'@anthropic-ai/claude-agent-sdk';try{const sdk=await loadNativeModule(module,'@anthropic-ai/claude-agent-sdk','0.3.325');if(typeof sdk.query!=='function')throw new Error('query export unavailable');return sdk;}catch(e){throw new Error(`Claude official SDK unavailable (${module}): ${e instanceof Error?e.message:String(e)}`);}}
   async executable(){const path=this.config.executablePath||this.config.command;if(!isAbsolute(path))throw new Error('Claude requires an explicit absolute local pathToClaudeCodeExecutable');await access(path);return path;}
   async checkVersion(){if(this.config.enabled===false)throw new Error('Claude runtime disabled');if(this.config.expectedVersion!=='2.1.325 (Claude Code)')throw new Error('Claude requires exact CLI 2.1.325 (Claude Code) and official SDK 0.3.325');const native=nativeCommand(await this.executable());const {stdout}=await promisify(execFile)(native.command,[...native.args,'--version'],{env:this.env,timeout:10000,windowsHide:true});if(stdout.trim()!==this.config.expectedVersion)throw new Error('Claude executable does not match exact CLI 2.1.325 (Claude Code)');}
-  async createSession(id:string,w:Workspace,model?:ModelIdentity){const live=await this.start(id,w.path,undefined,model);try{const nativeSessionId=await live.ready;live.attached=true;return{nativeSessionId,model:live.model,binding:{...this.binding(nativeSessionId,this.control,live.identity),generation:live.generation!}};}catch(e){this.lost.add(id);live.input.close();if(this.live.get(id)===live)this.live.delete(id);throw e;}}
-  async resumeSession(s:Session){if(!this.live.has(s.id)&&(ACTIVE.includes(s.state)||this.pendingControls(s.id).some(p=>['submit','cancel'].includes(p.command.action)&&(p.receipt.status==='uncertain'||!!p.receipt.runId||!!p.receipt.nativeRequestId))))throw new Error('Previous Claude Query is not owned; native termination verification is required before resume');const live=await this.start(s.id,s.cwd,s.ref.nativeSessionId,s.nextModel||s.model);try{await live.ready;}catch(e){this.lost.add(s.id);live.input.close();throw e;}this.context.bindSession?.(s.id,{...this.binding(s.ref.nativeSessionId,this.control,live.identity),generation:live.generation!});}
+  private scopes = new Map<string,string>();
+  async readScope(cwd: string) { return accountScope(await this.executable(),cwd,this.env); }
+  private async checkScope(s: Session) {
+    const live = this.live.get(s.id);
+    const expected = s.binding?.accountScope || live?.scope || this.scopes.get(s.id);
+    if (!expected) {
+      if (live?.firstTurn && !live.requestId) return;
+      throw new Error('原 Claude 账户或服务地址无法核验，请保留历史并新建会话');
+    }
+    if (await this.readScope(s.cwd)!==expected) throw new Error('Claude 账户、项目或服务地址已变化，无法续聊原会话');
+  }
+  async createSession(id:string,w:Workspace,model?:ModelIdentity){const live=await this.start(id,w.path,undefined,model);try{const nativeSessionId=await live.ready;live.firstTurn=true;live.scope=await this.readScope(w.path);if(live.scope)this.scopes.set(id,live.scope);live.attached=true;return{nativeSessionId,model:live.model,binding:{...this.binding(nativeSessionId,this.control,live.identity),accountScope:live.scope,generation:live.generation!}};}catch(e){this.lost.add(id);live.input.close();if(this.live.get(id)===live)this.live.delete(id);throw e;}}
+  async resumeSession(s:Session){if(this.lost.has(s.id))throw new Error('Previous Claude Query termination is unverified');if(!this.live.has(s.id)&&(ACTIVE.includes(s.state)||this.pendingControls(s.id).some(p=>['submit','cancel'].includes(p.command.action)&&(p.receipt.status==='uncertain'||!!p.receipt.runId||!!p.receipt.nativeRequestId))))throw new Error('Previous Claude Query is not owned; native termination verification is required before resume');await this.checkScope(s);const live=await this.start(s.id,s.cwd,s.ref.nativeSessionId,s.nextModel||s.model);live.scope=s.binding?.accountScope||this.scopes.get(s.id);try{await live.ready;}catch(e){this.lost.add(s.id);live.input.close();throw e;}this.context.bindSession?.(s.id,{...this.binding(s.ref.nativeSessionId,this.control,live.identity),accountScope:live.scope,generation:live.generation!});}
   async prepareSubmission(s:Session){await this.resumeSession(s);}
   async start(id:string,cwd:string,nativeId?:string,model?:ModelIdentity):Promise<Live>{if(this.lost.has(id))throw new Error('Previous Claude Query termination is unverified');const existing=this.live.get(id);if(existing){if(nativeId&&existing.nativeId!==nativeId)throw new Error('Claude Query native identity mismatch');return existing;}const pending=this.starting.get(id);if(pending)return pending;const promise=this.open(id,cwd,nativeId,model);this.starting.set(id,promise);try{return await promise;}finally{this.starting.delete(id);}}
   async open(id:string,cwd:string,nativeId?:string,model?:ModelIdentity):Promise<Live>{
@@ -64,8 +78,9 @@ export class ClaudeCodeAdapter extends AdapterBase implements AgentAdapter {
     if(input.attachments.length)throw new Error('Claude SDK attachment contract not enabled');
     if(this.lost.has(s.id))throw new Error('Previous Claude Query termination is unverified');
     if(this.pendingControls(s.id).some(p=>p.command.action==='cancel'||p.command.action==='submit'&&(p.receipt.status==='uncertain'||(p.receipt.nativeRequestId&&p.receipt.nativeRequestId!==(input.nativeRequestId||input.requestId)))))throw new Error('Claude has an unresolved native control operation');
+    await this.checkScope(s);
     let live=this.live.get(s.id);if(!live){if(ACTIVE.includes(s.state)&&s.state!=='accepted')throw new Error('Detached Claude run requires native termination verification');live=await this.start(s.id,s.cwd,s.ref.nativeSessionId,s.nextModel||s.model);await live.ready;}
-    await live.ready;if(input.generation!==undefined&&input.generation!==live.generation)throw new Error('Claude Query generation changed; refresh session before submitting');if(live.nativeId!==s.ref.nativeSessionId||!live.attached)throw new Error('Claude Query native identity mismatch');if(live.active)throw new Error('Claude Query already has an active input');if(live.cancelPending||live.cancelUncertain)throw new Error('Claude cancellation is unresolved');if(live.input.ended)throw new Error('Claude Query input is closed');live.active=true;live.stopping=false;live.accepted=false;live.requestId=input.nativeRequestId||input.requestId;live.streams.clear();
+    await live.ready;if(input.generation!==undefined&&input.generation!==live.generation)throw new Error('Claude Query generation changed; refresh session before submitting');if(live.nativeId!==s.ref.nativeSessionId||!live.attached)throw new Error('Claude Query native identity mismatch');if(live.active)throw new Error('Claude Query already has an active input');if(live.cancelPending||live.cancelUncertain)throw new Error('Claude cancellation is unresolved');if(live.input.ended)throw new Error('Claude Query input is closed');live.firstTurn=false;live.active=true;live.stopping=false;live.accepted=false;live.requestId=input.nativeRequestId||input.requestId;live.streams.clear();
     live.input.push({type:'user',message:{role:'user',content:input.text},parent_tool_use_id:null,uuid:live.requestId,session_id:s.ref.nativeSessionId});
   }
   frame(id:string,f:Native){
@@ -123,5 +138,25 @@ export class ClaudeCodeAdapter extends AdapterBase implements AgentAdapter {
   }
   async configure(s:Session,model:ModelIdentity){const live=this.live.get(s.id);if(live?.active)throw new Error('Change model between turns');if(live){if(typeof live.query.setModel!=='function')throw new Error('SDK Query.setModel unavailable');await live.query.setModel(model.modelId);}}
   async probe(){const result=await super.probe();try{await this.loadSdk();await this.checkVersion();const attached=[...this.live.values()].some(l=>l.attached&&l.nativeId);result.installed=true;result.version=this.config.expectedVersion;result.controlCapabilities=attached?this.control:{create:true,submit:false,observe:false,approve:false,answer:false,cancel:false,resume:false};result.detail=attached?'Official SDK Query connected':'Official SDK and explicit executable available for Query creation; authentication unverified until native initialization';result.capabilities={text:true,image:false,files:false,history:true,permission:true,questions:true,cancelScope:'owned Query current execution',models:true};try{result.models=await this.listModels();}catch(error){result.capabilities.models=false;result.detail+='; model catalog unavailable: '+String(error);}}catch(e){result.detail=e instanceof Error?e.message:String(e);}return result;}
+  async releaseSession(s: Session) {
+    const live=this.live.get(s.id);
+    if(!live)return;
+    if(live.active || live.pending.size || live.nativeId!==s.ref.nativeSessionId)throw new Error('Claude 仍在运行或等待审批');
+    live.input.close();
+    if(typeof live.query.return==='function')await live.query.return();
+    else if(typeof live.query.close==='function')await live.query.close();
+    await live.consumer;
+    this.context.disconnect?.([s.id],'已关闭该会话的空闲 Claude 进程');
+  }
+  async prepareDelete(s: Session) {
+    if (s.externalSource && !s.binding?.accountScope) throw new Error('这段外部 Claude 历史的账号或进程归属无法核验，请在原平台处理');
+    await this.checkScope(s);
+    const sdk=await this.loadSdk(); await this.checkVersion();
+    const info=await sdk.listSessions({dir:s.cwd,includeWorktrees:false});
+    if(!Array.isArray(info) || !s.deletionPending && !info.some((row:Native)=>row.sessionId===s.ref.nativeSessionId && row.cwd===s.cwd)) throw new Error('Claude 原始会话不在当前授权项目中');
+    if(this.live.has(s.id)||this.lost.has(s.id))throw new Error('Claude 进程尚未确认退出');
+    const root=resolve(this.env.CLAUDE_CONFIG_DIR || join(homedir(),'.claude'),'projects');
+    return transcriptRemoval(root,s.ref.nativeSessionId,await realpath(s.cwd),!!s.deletionPending);
+  }
   close(){for(const [id,live] of this.live){this.lost.add(id);live.input.close();for(const p of live.pending.values())p.finish({behavior:'deny',message:'Host adapter closed'},true);if(typeof live.query.return==='function')void live.query.return().catch(()=>{});}this.live.clear();}
 }

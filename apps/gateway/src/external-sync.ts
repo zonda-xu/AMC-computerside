@@ -56,7 +56,7 @@ export class ExternalSync {
             const candidateSignal = AbortSignal.any([signal, AbortSignal.timeout(this.candidateBudgetMs)]);
             try {
               const session = await externalRead(this.core.external.ensureImport(candidate.candidateId, candidateSignal), candidateSignal);
-              if(session.binding&&session.binding.state!=='unbound'){this.candidateStatuses.delete(candidateKey);continue;}
+              if(session.archived || session.deletionPending || session.binding && session.binding.state!=='unbound'){this.candidateStatuses.delete(candidateKey);continue;}
               this.core.workspaceIdentities.verify(workspace.id, true); candidateSignal.throwIfAborted();
               await externalRead(this.core.external.syncRound(session.id, { signal: candidateSignal }), candidateSignal);
               candidateSignal.throwIfAborted(); this.core.workspaceIdentities.verify(workspace.id, true);

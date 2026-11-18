@@ -90,6 +90,7 @@ test('Claude recreating a Query advances only its handle generation and refuses 
   const adapter = new ClaudeCodeAdapter('claude-code', { command: process.execPath, expectedVersion: '' }, f.context);
   const outputs: InputQueue<any>[] = []; const inputs: InputQueue<any>[] = [];
   adapter.checkVersion = async () => {};
+  adapter.readScope = async () => 'fixture-account-and-route';
   adapter.loadSdk = async () => ({ query: ({ prompt }: any) => {
     inputs.push(prompt); const output = new InputQueue<any>(); outputs.push(output);
     output.push({ type: 'system', subtype: 'init', session_id: 'native' });
@@ -136,6 +137,7 @@ test('Core rejects an old Claude generation before dispatch and accepts refreshe
   const f = await fixture(); const outputs: InputQueue<any>[] = []; const inputs: InputQueue<any>[] = [];
   const adapter = new ClaudeCodeAdapter('claude-code', { command: process.execPath, expectedVersion: '' }, f.core.context('claude-code'));
   adapter.checkVersion = async () => {};
+  adapter.readScope = async () => 'fixture-account-and-route';
   adapter.probe = async () => ({ ...(await f.adapter.probe()), id: 'claude-code', runtimeInstanceId: adapter.context.runtimeInstanceId });
   adapter.loadSdk = async () => ({ query: ({ prompt }: any) => {
     inputs.push(prompt); const output = new InputQueue<any>(); outputs.push(output); output.push({ type: 'system', subtype: 'init', session_id: 'claude-native' });

@@ -126,6 +126,22 @@ export class Store {
       i.status = 'responding'; this.put('decision',id,decision); this.put('session',sessionId,s); return i;
     });
   }
+  eraseSession(s: Session) {
+    this.transaction(() => {
+      const del = (query: string, id: string) => this.db.prepare(query).run(id);
+      this.put('deleted-session', s.id, { nativeHash: digest(s.ref.nativeSessionId), workspaceId: s.ref.workspaceId, revision: s.catalogRevision ?? 0 });
+      for (const i of s.interactions) del("DELETE FROM objects WHERE kind='decision' AND id=?", i.id);
+      for (const m of s.messages) del("DELETE FROM objects WHERE kind='external-message-v1' AND id=?", m.id);
+      del("DELETE FROM objects WHERE kind IN ('push-source','push-provider-result') AND id IN (SELECT id FROM push_jobs WHERE session=?)", s.id);
+      del("DELETE FROM push_intents WHERE job IN (SELECT id FROM push_jobs WHERE session=?)", s.id);
+      del("DELETE FROM commands WHERE (device,id) IN (SELECT device,id FROM command_intents WHERE session=?)", s.id);
+      for (const table of ['command_intents','push_jobs','push_baselines','native_events','events']) del('DELETE FROM '+table+' WHERE session=?', s.id);
+      del("DELETE FROM objects WHERE kind='native-run' AND json_extract(json,'$.runId') IN (SELECT id FROM objects WHERE kind='run' AND json_extract(json,'$.sessionId')=?)", s.id);
+      del("DELETE FROM objects WHERE kind='external-candidate-v1' AND id IN (SELECT id FROM objects WHERE kind='external-import-v1' AND json_extract(json,'$.sessionId')=?)", s.id);
+      del("DELETE FROM objects WHERE kind IN ('run','external-import-v1','creation') AND json_extract(json,'$.sessionId')=?", s.id);
+      del("DELETE FROM objects WHERE kind IN ('session','active-command','external-checkpoint-v1','external-baseline-v1') AND id=?", s.id);
+    });
+  }
   recover() {
     for (const s of this.list<Session>('session')) {
       // Historical projections never held an execution handle. A gateway restart

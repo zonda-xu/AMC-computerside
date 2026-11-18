@@ -1,7 +1,7 @@
 import type WebSocket from 'ws';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
-import type { AgentAdapter, Decision, Interaction, ModelIdentity, Session, Submission, Workspace, RuntimeDescriptor } from '../../protocol/src/types.ts';
+import type { AgentAdapter, Decision, Interaction, ModelIdentity, Session, Submission, Workspace, RuntimeDescriptor, RuntimeBinding } from '../../protocol/src/types.ts';
 import { AdapterBase, unavailableCapabilities } from '../common/base.ts';
 import { decodeRequestIdentity } from '../../../plugins/dsh-bridge/features.mjs';
 import { mapDurable, streamText } from '../../../plugins/dsh-bridge/mapping.mjs';
@@ -9,7 +9,8 @@ type Native=Record<string,any>;
 export class DshAdapter extends AdapterBase implements AgentAdapter {
   control={create:true,submit:true,observe:true,approve:true,answer:true,cancel:true,resume:true,configure:false,attach:true,slash:false,steer:false};
   nativeFeatures:Record<string,boolean>={};
-  updateCapabilities(r:Native){if(!r.capabilities)return;this.nativeFeatures=r.capabilities;for(const key of Object.keys(this.control) as Array<keyof typeof this.control>)this.control[key]=r.capabilities[key]===true;}
+  historyNamespace?:string;
+  updateCapabilities(r:Native){this.historyNamespace=typeof r.historyNamespace==='string' && /^dsh-store:[a-f0-9]{64}$/.test(r.historyNamespace)?r.historyNamespace:undefined;if(!r.capabilities)return;this.nativeFeatures=r.capabilities;for(const key of Object.keys(this.control) as Array<keyof typeof this.control>)this.control[key]=r.capabilities[key]===true;}
   adopting=new Map<string,{cwd:string;pluginInstanceId:string;session:Session}>();
   socket?:WebSocket; byNative=new Map<string,string>(); pending=new Map<string,{resolve:(v:Native)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>(); pluginInstanceId?:string; handshake?:Promise<void>; subscriptions=new Map<string,string>(); turns=new Map<string,number>(); sequences=new Map<string,number>(); streams=new Map<string,Native>(); snapshots=new Map<string,{resolve:()=>void;reject:(e:Error)=>void}>(); nativeInteractions=new Map<string,Native>(); following=new Map<string,Promise<void>>();
   reopenings=new Map<string,ReturnType<typeof setTimeout>>(); reopenDelays=new Map<string,number>();
@@ -41,16 +42,22 @@ export class DshAdapter extends AdapterBase implements AgentAdapter {
     this.byNative.set(r.sessionId,id);
     const selected=model?(await this.call('configure',{sessionId:r.sessionId,model})).selected:undefined;
     if(model&&(typeof selected?.providerId!=='string'||typeof selected?.modelId!=='string'))throw new Error('DSH model selection was not confirmed');
-    return{nativeSessionId:r.sessionId,binding:this.binding(r.sessionId,this.control,this.pluginInstanceId),model:selected};
+    const binding:RuntimeBinding={...this.binding(r.sessionId,this.control,this.pluginInstanceId),historyNamespace:this.historyNamespace};
+    return{nativeSessionId:r.sessionId,binding,model:selected};
   }
-  async resumeSession(s:Session){await this.handshake;if(s.externalSource){const binding=await this.attachExistingSession(s,this.pluginInstanceId||'');this.context.bindSession?.(s.id,binding);return;}this.byNative.set(s.ref.nativeSessionId,s.id);await this.subscribe(s.ref.nativeSessionId,s.id);await this.restorePending(s.ref.nativeSessionId,s.id);this.attachSession(s,this.control,this.pluginInstanceId);}
+  async resumeSession(s:Session){await this.handshake;
+    if(s.binding?.historyNamespace && s.binding.historyNamespace!==this.historyNamespace)throw new Error('DeepSeek Harness 历史存储位置已变化');
+    if(s.externalSource || this.historyNamespace && s.binding?.historyNamespace===this.historyNamespace && s.binding.nativeIdentity!==this.pluginInstanceId){const binding=await this.attachExistingSession(s,this.pluginInstanceId||'');this.context.bindSession?.(s.id,binding);return;}this.byNative.set(s.ref.nativeSessionId,s.id);await this.subscribe(s.ref.nativeSessionId,s.id);await this.restorePending(s.ref.nativeSessionId,s.id);this.context.bindSession?.(s.id,{...this.binding(s.ref.nativeSessionId,this.control,this.pluginInstanceId),historyNamespace:this.historyNamespace});}
   async attachExistingSession(s:Session,nativeIdentity:string){
     await this.handshake;
+    if(s.binding?.historyNamespace && s.binding.historyNamespace!==this.historyNamespace)throw new Error('DeepSeek Harness 原历史目录已改变');
+    if(this.historyNamespace && s.externalSource && s.externalSource.namespace!==this.historyNamespace && s.externalSource.namespace!==this.pluginInstanceId)throw new Error('无法核实该历史来自当前 DeepSeek Harness 存储');
+    if(this.historyNamespace && s.binding?.historyNamespace===this.historyNamespace && nativeIdentity===s.binding.nativeIdentity && this.pluginInstanceId) nativeIdentity=this.pluginInstanceId;
     if(!nativeIdentity||nativeIdentity!==this.pluginInstanceId||s.ref.engineId!==this.engineId||s.ref.runtimeInstanceId!==this.context.runtimeInstanceId)throw new Error('DSH runtime ownership changed');
     const native=s.ref.nativeSessionId;const cwd=await realpath(s.cwd);
     const owner=this.byNative.get(native);
     if(owner&&owner!==s.id)throw new Error('DSH native session is already attached to another local session');
-    const request={sessionId:native,cwd,pluginInstanceId:nativeIdentity};
+    const request={sessionId:native,cwd,pluginInstanceId:nativeIdentity,restoreIdle:true};
     const verify=async()=>{const evidence=await this.call('attach',request);if(evidence.pluginInstanceId!==nativeIdentity||this.pluginInstanceId!==nativeIdentity||evidence.sessionId!==native||evidence.cwd!==cwd||evidence.agentAvailable!==true)throw new Error('DSH live session ownership was not confirmed');};
     await verify();
     const oldSubscription=this.subscriptions.get(native);
@@ -58,7 +65,7 @@ export class DshAdapter extends AdapterBase implements AgentAdapter {
     this.adopting.set(native,{cwd,pluginInstanceId:nativeIdentity,session:s});this.byNative.set(native,s.id);
     try{
       await this.subscribe(native,s.id);await this.restorePending(native,s.id);await verify();
-      return this.binding(native,this.control,nativeIdentity);
+      return {...this.binding(native,this.control,nativeIdentity),historyNamespace:this.historyNamespace};
     }catch(error){
       this.context.disconnect?.([s.id],'DSH attachment could not confirm the same live session');
       const subscriptionId=this.subscriptions.get(native);this.subscriptions.delete(native);
@@ -119,6 +126,26 @@ export class DshAdapter extends AdapterBase implements AgentAdapter {
     else if(p.type==='interaction')this.openInteraction(id,p.interaction);
     else if(p.type==='interaction.closed'){const i=this.nativeInteractions.get(p.interactionId);if(i){this.context.emit(id,'interaction.closed',{id:i.localId});this.nativeInteractions.delete(p.interactionId);}}
     else if(['message.delta','message.completed','run.updated','tool.updated','agent.updated','model.confirmed','error'].includes(p.type)){if(p.type==='message.completed'&&p.data.nativeKey){const session=this.context.getSession(id);const source=session.externalSource;const externalId=source&&Number.isSafeInteger(p.data.nativeSeq)?createHash('sha256').update(JSON.stringify([createHash('sha256').update(JSON.stringify([session.ref.hostId,session.ref.engineId,source.namespace,source.nativeId])).digest('hex'),String(p.data.nativeSeq)+':'+p.data.role])).digest('hex'):undefined;const prior=session.messages.findLast(m=>(m.nativeKey===p.data.nativeKey||m.id===externalId)&&m.role===p.data.role);if(prior)p.data.id=prior.id;}this.context.emit(id,p.type,p.data);}
+  }
+  async releaseSession(s: Session) {
+    const native = s.ref.nativeSessionId;
+    if (this.byNative.get(native) !== s.id) return;
+    await this.handshake;
+    const peer = this.pluginInstanceId;
+    const snapshot = await this.call('snapshot', {sessionId:native});
+    if (!peer || this.pluginInstanceId !== peer || snapshot.pluginInstanceId !== peer ||
+      snapshot.state?.active || snapshot.pending?.length) throw new Error('DeepSeek Harness 仍在执行、等待审批或已换实例');
+    const subscription = this.subscriptions.get(native);
+    if (subscription) await this.call('unsubscribe', {subscriptionId:subscription});
+    if (this.pluginInstanceId !== peer) throw new Error('DeepSeek Harness 连接已变化，请刷新状态');
+    const timer = this.reopenings.get(native);
+    if (timer) clearTimeout(timer);
+    this.reopenings.delete(native); this.reopenDelays.delete(native);
+    this.subscriptions.delete(native); this.byNative.delete(native);
+    this.context.disconnect?.([s.id], '已归档，恢复后可连接原会话');
+  }
+  async prepareDelete(_s: Session): Promise<() => Promise<void>> {
+    throw new Error('此版 DeepSeek Harness 提供归档，但未提供可确认清理原始对话与子代理的删除接口');
   }
   close(){for(const timer of this.reopenings.values())clearTimeout(timer);this.reopenings.clear();this.socket?.close();}
 }

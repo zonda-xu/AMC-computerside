@@ -1,4 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
+import { devEcoEndpoint, isDevEco } from '../../../packages/adapters/opencode/deveco-service.ts';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
@@ -42,6 +43,7 @@ async function version(engine: ManagedEngine, config: ManagedRuntimeConfig) {
   const native = nativeCommand(config.command);
   const result = await promisify(execFile)(native.command, [...native.args, '--version'], { env: nativeEnvironment(engine, config.env), timeout: 10000, windowsHide: true, maxBuffer: 65536 });
   const actual = result.stdout.trim();
+  if(engine==='opencode'&&isDevEco(config.command)&&/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(actual))return actual;
   if (actual !== config.expectedVersion || (engine === 'codex' ? actual !== runtimeVersions.codex : !/^(?:opencode\s+)?2\.3\.0$/.test(actual))) throw new Error(`${engine}: native version does not match the pinned target`);
   return actual;
 }
@@ -106,6 +108,10 @@ export class RuntimeManager {
       await (this.hooks.codexHandshake || codexHandshake)(previous.endpoint);
       return { version: actualVersion, endpoint: previous.endpoint, identity: previous.identity, pid: previous.pid, headers: {} as Record<string, string> };
     }
+    if(engine==='opencode'&&isDevEco(config.command)){
+      const peer=await devEcoEndpoint(this.root,config);
+      return {version:actualVersion,endpoint:peer.url,identity:peer.identity,pid:peer.pid,headers:peer.headers};
+    }
     const service = await this.service();
     const endpoint = await service.discover();
     if (!endpoint) throw new Error('OpenCode discovery returned no compatible service; registration/PID must be inspected before explicit startup');
@@ -138,7 +144,8 @@ export class RuntimeManager {
         }
         if (error) throw new Error(`Started Codex PID ${pid} but handshake failed; process retained for inspection`);
       }
-      if (engine === 'opencode') {
+      if(engine==='opencode'&&isDevEco(config.command))await devEcoEndpoint(this.root,config,true);
+      else if (engine === 'opencode') {
         const service = await this.service();
         if (!await service.discover()) {
           if (previous) throw new Error('Previously registered OpenCode runtime is unavailable; inspect its PID/version, no replacement permitted');
@@ -151,8 +158,10 @@ export class RuntimeManager {
       }
       const connection = await this.connection(engine, config);
       const current = await this.registration(engine);
-      if (current?.identity === connection.identity) return current;
-      const record: RuntimeRegistration = { engine, runtimeInstanceId: randomUUID(), generation: (current?.generation || 0) + 1, endpoint: connection.endpoint, version: actual, identity: connection.identity };
+      const devEco=engine==='opencode'&&isDevEco(config.command);
+      const same=current?.identity===connection.identity;
+      if(same && (!devEco || current.endpoint===connection.endpoint && current.version===actual && current.pid===connection.pid))return current;
+      const record: RuntimeRegistration = { engine, runtimeInstanceId: same?current!.runtimeInstanceId:randomUUID(), generation: (current?.generation || 0) + 1, endpoint: connection.endpoint, version: actual, identity: connection.identity, ...(devEco?{pid:connection.pid}:{}) };
       await this.persist(record);
       return record;
     } finally { await lock.close(); await unlink(lockPath); }

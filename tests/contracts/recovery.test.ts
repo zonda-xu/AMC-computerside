@@ -49,7 +49,7 @@ test('Codex probe never opens control on a version-only mismatch or failed insta
 });
 
 test('Claude persistent official SDK boundary consumes queue, settles permission once, confirms result and resumes same session',async t=>{
-  const f=nativeContext('claude-code');const a=new ClaudeCodeAdapter('claude-code',{command:process.execPath,expectedVersion:''},f.context);const outputs:InputQueue<any>[]=[];const inputs:any[]=[];const options:any[]=[];let interrupts=0;
+  const f=nativeContext('claude-code');const a=new ClaudeCodeAdapter('claude-code',{command:process.execPath,expectedVersion:''},f.context);a.readScope=async()=>'fixture-account-and-route';const outputs:InputQueue<any>[]=[];const inputs:any[]=[];const options:any[]=[];let interrupts=0;
   t.mock.method(a,'checkVersion',async()=>{});
   t.mock.method(a,'loadSdk',async()=>({query:({prompt,options:opts}:any)=>{options.push(opts);const output=new InputQueue<any>();outputs.push(output);output.push({type:'system',subtype:'init',session_id:'native',model:'actual'});void(async()=>{for await(const input of prompt)inputs.push(input);})();return{[Symbol.asyncIterator]:()=>output[Symbol.asyncIterator](),interrupt:async()=>{interrupts++;return{still_queued:[]};},return:async()=>{output.close();},setModel:async()=>{}};}}));
   try{const created=await a.createSession(f.session.id,f.workspace);assert.equal(created.nativeSessionId,'native');await a.submit(f.session,{text:'one',attachments:[],requestId:'input-1'});await until(()=>inputs.length===1);assert.equal(f.events.some(e=>e.data.nativeAccepted===true),false);

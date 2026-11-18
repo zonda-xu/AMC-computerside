@@ -11,6 +11,10 @@ export function nativeCommand(command: string, os = process.platform, searchPath
     if (found) file = found;
   }
   if (!/\.cmd$/i.test(file)) return { command: file, args: [] };
+  if(/(?:^|[\\/])deveco\.cmd$/i.test(file)){
+    const executable=join(dirname(file),'node_modules','@deveco','deveco-code','bin','deveco.exe');
+    if(existsSync(executable))return {command:executable,args:[]};
+  }
   const source = readFileSync(file, 'utf8');
   const match = source.match(/"%(?:dp0|~dp0)%?\\([^"\r\n]+\.(?:c?js|mjs))"/i);
   if (!match) throw new Error('Unsupported Windows command shim; use the native .exe path');

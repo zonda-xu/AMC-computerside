@@ -22,6 +22,30 @@ test('DSH bridge adoption proves live ordinary Agent ownership and canonical cwd
   } finally { bridge.close(); }
 });
 
+test('opening an idle durable DSH conversation activates only its original session and never submits a turn', async () => {
+  const cwd=await realpath('.');
+  const row={sessionId:'desktop-old',cwd,agentAvailable:false,running:false,formatStatus:'current'};
+  const observed:string[]=[];
+  const ctl={
+    list:async()=>({items:[row]}),
+    projections:async()=>({kind:'sequenced',asOfSeq:4}),
+    async *follow(request:{address:{sessionId:string};activate:boolean;maxMessages:number}){
+      assert.equal(request.activate,true);assert.equal(request.maxMessages,1);
+      observed.push(request.address.sessionId);row.agentAvailable=true;
+      yield {type:'snapshot',header:{id:row.sessionId,cwd}};
+    }
+  };
+  const bridge=controllerBridge({on:()=>()=>{}},ctl,'boot',()=>{});
+  const request={pluginInstanceId:'boot',sessionId:row.sessionId,cwd};
+  try{
+    await assert.rejects(bridge.handlers.attach(request),/not owned/);
+    assert.deepEqual(observed,[]);
+    const result=await bridge.handlers.attach({...request,restoreIdle:true});
+    assert.equal(result.sessionId,row.sessionId);assert.equal(result.agentAvailable,true);
+    assert.deepEqual(observed,['desktop-old']);
+  }finally{bridge.close();}
+});
+
 test('DSH adoption checks both native evidence and opening header before binding; history remains silent', async t => {
   const f=nativeContext('deepseek-harness');const cwd=await realpath(f.session.cwd);
   const a=new DshAdapter('deepseek-harness',{command:'unused',expectedVersion:''},f.context);a.pluginInstanceId='plugin';

@@ -5,10 +5,10 @@ import type { Session, Workspace } from '../../../packages/protocol/src/types.ts
 import { authorizedPath, inside, MAX_FILE, readProject } from './files.ts';
 import { requireValue } from '../../../packages/protocol/src/validation.ts';
 
-export interface ResultFile { id:string; path:string; name:string; kind:'image'|'table'|'text'|'file'; bytes:number; source:string }
+export interface ResultFile { id:string; path:string; name:string; kind:'image'|'video'|'table'|'text'|'file'; bytes:number; source:string }
 export interface FilePreview { name:string; path:string; kind:ResultFile['kind']; mime:string; bytes:number; text?:string; data?:string; columns?:string[]; rows?:string[][]; truncated?:boolean; detail?:string }
 const textExtensions=new Set(['.txt','.md','.markdown','.json','.yaml','.yml','.xml','.html','.css','.js','.ts','.py','.log','.r','.rmd','.ipynb','.svg','.sh','.toml','.sql']);
-function fileKind(path:string):ResultFile['kind']{const ext=extname(path).toLowerCase();return ['.png','.jpg','.jpeg','.webp','.gif'].includes(ext)?'image':['.csv','.tsv'].includes(ext)?'table':textExtensions.has(ext)?'text':'file';}
+function fileKind(path:string):ResultFile['kind']{const ext=extname(path).toLowerCase();return ['.png','.jpg','.jpeg','.webp','.gif'].includes(ext)?'image':['.mp4','.mov','.m4v','.webm'].includes(ext)?'video':['.csv','.tsv'].includes(ext)?'table':textExtensions.has(ext)?'text':'file';}
 
 // Decode only references, never whole message text. All referenced paths still
 // pass the same realpath/workspace authorization used by the file browser.
@@ -79,7 +79,7 @@ function imageMime(data:Buffer):string{
 export async function previewProject(workspace:Workspace,path:string):Promise<FilePreview>{
   const file=await authorizedPath(workspace,path);const info=await stat(file);requireValue(info.isFile(),'not_file','Preview requires a file');
   const kind=fileKind(path);const base:FilePreview={name:basename(path),path,kind,mime:'application/octet-stream',bytes:info.size};
-  if(kind==='file'||info.size>(kind==='image'?MAX_FILE:1024*1024))return{...base,kind:'file',detail:info.size>MAX_FILE?'文件超过 16 MiB，请在主机查看':'可保存到设备后使用对应应用打开'};
+  if(kind==='file'||kind==='video'||info.size>(kind==='image'?MAX_FILE:1024*1024))return{...base,kind:'file',detail:info.size>MAX_FILE?'文件超过 16 MiB，请在主机查看':'可保存到设备后使用对应应用打开'};
   const data=await readProject(workspace,path,kind==='image'?MAX_FILE:1024*1024);
   if(kind==='image'){const mime=imageMime(data);requireValue(mime,'invalid_image','Image file signature is invalid');return{...base,mime,data:data.toString('base64')};}
   const text=data.toString('utf8').replace(/^\uFEFF/,'');

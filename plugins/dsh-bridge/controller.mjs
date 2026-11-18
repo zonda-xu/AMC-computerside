@@ -58,9 +58,33 @@ export function controllerBridge(ctx,ctl,pluginInstanceId,publish){
     async attach(p){
       if(p.pluginInstanceId!==pluginInstanceId)throw new Error('DSH plugin generation changed');
       const rows=sessionRows(await ctl.list({},AbortSignal.timeout(30000)));
-      const row=rows.find(row=>row.sessionId===p.sessionId);
-      if(!row||row.agentAvailable!==true||row.formatStatus!=='current'||row.origin==='subagent')throw new Error('DSH session is not owned by a live ordinary Agent in this host');
-      if(typeof row.cwd!=='string'||typeof p.cwd!=='string'||await realpath(row.cwd)!==await realpath(p.cwd))throw new Error('DSH session workspace changed');
+      let row=rows.find(row=>row.sessionId===p.sessionId);
+      if(!row || row.origin==='subagent' || row.formatStatus && row.formatStatus!=='current')throw new Error('DSH session is not owned by a live ordinary Agent in this host');
+      const cwd=typeof p.cwd==='string' ? await realpath(p.cwd) : undefined;
+      const sameProject=async candidate=>candidate && candidate.sessionId===p.sessionId && candidate.origin!=='subagent' &&
+        typeof candidate.cwd==='string' && await realpath(candidate.cwd)===cwd;
+      if(!await sameProject(row))throw new Error('DSH session workspace changed');
+      if(row.agentAvailable!==true && p.restoreIdle===true && row.running===false){
+        const controller=new AbortController(), deadline=setTimeout(()=>controller.abort(new Error('DSH 原会话激活超时')),10000);
+        const signal=controller.signal;
+        let follow;
+        try{
+          const cut=await ctl.projections({sessionId:p.sessionId},signal);
+          if(cut?.kind!=='sequenced' || !Number.isSafeInteger(cut.asOfSeq))throw new Error('DSH 历史需要迁移，无法接续');
+          follow=ctl.follow({address:{kind:'session',sessionId:p.sessionId},maxMessages:1,activate:true},signal)[Symbol.asyncIterator]();
+          const first=await follow.next();
+          if(first.value?.type!=='snapshot' || first.value.header?.id!==p.sessionId || typeof first.value.header.cwd!=='string' ||
+             await realpath(first.value.header.cwd)!==cwd)throw new Error('DSH 原始会话身份已变化');
+          while(!signal.aborted){
+            row=sessionRows(await ctl.list({},signal)).find(item=>item.sessionId===p.sessionId);
+            if(!await sameProject(row))throw new Error('DSH session workspace changed');
+            if(row.agentAvailable===true)break;
+            await new Promise(resolve=>setTimeout(resolve,120));
+          }
+          signal.throwIfAborted();
+        }finally{clearTimeout(deadline);controller.abort();await follow?.return?.();}
+      }
+      if(row.agentAvailable!==true || row.formatStatus!=='current')throw new Error('DSH session is not owned by a live ordinary Agent in this host');
       return{pluginInstanceId,sessionId:row.sessionId,cwd:await realpath(row.cwd),agentAvailable:true};
     },
     async create(p){

@@ -40,19 +40,22 @@ export function externalHandlers(ctl, observed, instanceId) {
         records.unshift(...page.records);
         if(records.length>20000)throw new Error('DSH history exceeds record budget');
         if(!page.hasMore){
-          const items=[];let prior=-1;
+          const items=[];const tools=[];let prior=-1;
            for(const r of records){const e=r.event;if(r.type!=='event'||!e||!Number.isSafeInteger(e.seq)||e.seq!==prior+1||e.seq>throughSeq)throw new Error('DSH event order or waterline mismatch');prior=e.seq;
             if(e.type==='user/message'&&humanUserEvent(e)){
               if(!Array.isArray(e.data.content))throw new Error('Malformed DSH user content');
               items.push({nativeEventId:String(e.seq)+':user',role:'user',text:e.data.content.filter(c=>c.type==='text'&&typeof c.text==='string').map(c=>c.text).join('\n')});
+            }else if(e.type==='tool/call'||e.type==='tool/result'){
+              for(const m of mapDurable(e))if(m.type==='tool.updated')tools.push({id:m.data.id,title:m.data.title?.slice(0,500),status:m.data.status,
+                detail:(typeof m.data.detail==='string'?m.data.detail:JSON.stringify(m.data.detail||{})).slice(0,8192)});
             }else if(e.type==='assistant/message'||e.type==='assistant/attempt'){
               for(const m of mapDurable(e))if(m.type==='message.completed')items.push({nativeEventId:String(e.seq)+':'+m.data.role,role:m.data.role,text:m.data.text});
             }
           }
            if(prior!==throughSeq)throw new Error('DSH history did not reach the pinned waterline');
-           if(items.length>5000||Buffer.byteLength(JSON.stringify(items))>4*1024*1024)throw new Error('DSH history exceeds message budget');
+           if(items.length>5000||tools.length>5000||Buffer.byteLength(JSON.stringify({items,tools}))>4*1024*1024)throw new Error('DSH history exceeds message budget');
            await check(p);
-          return{items};
+          return{items,...(tools.length?{tools}:{})};
         }
         const next=page.records[0]?.event?.seq;
         if(!Number.isSafeInteger(next)||(beforeSeq!==undefined&&next>=beforeSeq))throw new Error('DSH history cursor made no progress');beforeSeq=next;
