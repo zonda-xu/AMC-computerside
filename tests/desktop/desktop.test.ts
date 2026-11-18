@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request as httpsRequest } from 'node:https';
@@ -135,11 +135,14 @@ test('standalone host preserves identity, runs real TLS pairing, invalidates ref
     await service.api('/v2/project-settings','POST',{policy:{syncEngines:[],manualProjects:[manual],excludedProjects:[],creationRoot:destination}});
     const phone=await req('/v2/bootstrap',undefined,paired.data.token);
     assert.equal(phone.data.nativeProjectCatalog,true);
-    assert.ok(phone.data.workspaces.some((w:{path:string})=>w.path===manual));
+    assert.equal(phone.status, 200);
+    const selectedFolder = await realpath(manual);
+    assert.ok(phone.data.workspaces.some((w: { path: string }) => w.path === selectedFolder));
     const roots=await req('/v2/workspace-roots',undefined,paired.data.token);
     assert.deepEqual(roots.data.items.map((r:{name:string})=>r.name),['new-orders']);
     const folder=await req('/v2/workspaces/create',{clientRequestId:'create-phone-folder',rootId:roots.data.items[0].rootId,directoryName:'coffee',name:'Coffee'},paired.data.token);
-    assert.equal(folder.data.path,join(destination,'coffee'));
+    assert.equal(folder.status, 200);
+    assert.equal(folder.data.path, join(await realpath(destination), 'coffee'));
     const persisted=await readConfig(root);
     assert.deepEqual(persisted?.allowedWorkspaceRoots,second.allowedWorkspaceRoots);
     assert.equal(persisted?.hostId,first.hostId);
