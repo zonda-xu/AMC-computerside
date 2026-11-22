@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { fixture } from '../helpers.ts';
 import { parseDelimited, previewProject, resultPath, sessionArtifacts } from '../../apps/gateway/src/artifacts.ts';
 
@@ -13,6 +14,26 @@ test('result references stay inside the authorized workspace and come from the c
     assert.equal(resultPath(f.w,'../secret.txt'),undefined);assert.equal(resultPath(f.w,'data:image/png;base64,abcd'),undefined);assert.equal(resultPath(f.w,'file://outside/share/file.txt'),undefined);
     assert.equal(resultPath(f.w,join(f.w.path,'out','结果.csv')),'out/结果.csv');
     await assert.rejects(previewProject(f.w,'../b/absent.txt'));
+  }finally{await f.close();}
+});
+test('Markdown links parse fragments before decoding and literal file paths preserve # and %',async()=>{
+  const f=await fixture();
+  try{
+    const expected=['样本#1.txt','progress 100%25#raw.txt','tool%23#copy.txt','plain.md','url#result.txt','literal%23.txt'];
+    await Promise.all([...expected,'样本'].map(name=>writeFile(join(f.w.path,name),name)));
+    const url=pathToFileURL(join(f.w.path,'url#result.txt'));
+    url.hash='heading';
+    f.s.runId='current';
+    f.s.messages=[{id:'answer',role:'assistant',complete:true,runId:'current',text:[
+      '[样本](<'+encodeURIComponent('样本#1.txt')+'#section>)',
+      '[普通段落](plain.md#heading)', '[本文件段落](#heading)',
+      '`progress 100%25#raw.txt`', '[百分号只解码一次](literal%2523.txt)'
+    ].join(' ')}];
+    f.s.tools=[{id:'tool',title:'Saved file',status:'completed',runId:'current',
+      detail:JSON.stringify({outputPath:join(f.w.path,'tool%23#copy.txt')})}];
+    f.s.result={url:url.href};
+    const files=await sessionArtifacts(f.s,f.w);
+    assert.deepEqual(files.map(f=>f.path).sort(),expected.sort());
   }finally{await f.close();}
 });
 test('CSV preview respects quoted newlines and escaped quotes, and never evaluates formulas',()=>{

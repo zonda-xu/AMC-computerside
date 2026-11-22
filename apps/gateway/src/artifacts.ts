@@ -10,45 +10,52 @@ export interface FilePreview { name:string; path:string; kind:ResultFile['kind']
 const textExtensions=new Set(['.txt','.md','.markdown','.json','.yaml','.yml','.xml','.html','.css','.js','.ts','.py','.log','.r','.rmd','.ipynb','.svg','.sh','.toml','.sql']);
 function fileKind(path:string):ResultFile['kind']{const ext=extname(path).toLowerCase();return ['.png','.jpg','.jpeg','.webp','.gif'].includes(ext)?'image':['.mp4','.mov','.m4v','.webm'].includes(ext)?'video':['.csv','.tsv'].includes(ext)?'table':textExtensions.has(ext)?'text':'file';}
 
-// Decode only references, never whole message text. All referenced paths still
-// pass the same realpath/workspace authorization used by the file browser.
-export function resultPath(workspace:Workspace, value:string):string|undefined{
-  let path=value.trim();
-  if(path.startsWith('<')&&path.endsWith('>'))path=path.slice(1,-1);
-  try{path=decodeURIComponent(path);}catch{return;}
-  if(/^file:\/\//i.test(path)){
-    try{const url=new URL(path);if(url.hostname&&url.hostname!=='localhost')return;path=url.pathname;if(/^\/[A-Za-z]:/.test(path))path=path.slice(1);}catch{return;}
-  }
+type ReferenceKind = 'link' | 'path';
+
+// A URI fragment is stripped before decoding. Filesystem paths from tools and
+// inline code already name a file, so their percent and hash characters are data.
+export function resultPath(workspace:Workspace, value:string, kind:ReferenceKind='link'):string|undefined{
+  let path=kind==='link'?value.trim():value;
+  if(kind==='link'&&path.startsWith('<')&&path.endsWith('>'))path=path.slice(1,-1);
+  try{
+    if(/^file:\/\//i.test(path)){
+      const url=new URL(path);
+      if(url.hostname&&url.hostname!=='localhost')return;
+      path=decodeURIComponent(url.pathname);
+      if(/^\/[A-Za-z]:/.test(path))path=path.slice(1);
+    }else if(kind==='link'){
+      path=decodeURIComponent(path.split('#',1)[0]);
+    }
+  }catch{return;}
   if(/^(?:https?|data|javascript|content|sandbox):/i.test(path)||path.includes('\0'))return;
-  path=path.replace(/#.*$/,'');
   if(!path||path.startsWith('\\\\')||path.startsWith('//'))return;
   const absolute=resolve(workspace.path,path);
   if(!inside(workspace.path,absolute))return;
   if(!isAbsolute(path)&&/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path))return;
   return relative(workspace.path,absolute).split(sep).join('/');
 }
-export function referencedFiles(session:Session):string[]{
+export function referencedFiles(session:Session, resolveReference:(value:string,kind:ReferenceKind)=>string|undefined=value=>value):string[]{
   const lastUser=session.messages.findLastIndex(m=>m.role==='user');
   const messages=session.messages.slice(Math.max(0,lastUser)).filter(m=>m.role==='assistant'&&!m.abandoned&&!m.temporary&&(!m.runId||m.runId===session.runId));
-  const refs:string[]=[];
+  const refs:(string|undefined)[]=[];
   for(const m of messages){
-    for(const match of m.text.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^\s)]+)(?:\s+"[^"]*")?\)/g))refs.push(match[1]);
-    for(const match of m.text.matchAll(/`([^`\n]+\.[A-Za-z0-9]{1,12})`/g))refs.push(match[1]);
+    for(const match of m.text.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^\s)]+)(?:\s+"[^"]*")?\)/g))refs.push(resolveReference(match[1],'link'));
+    for(const match of m.text.matchAll(/`([^`\n]+\.[A-Za-z0-9]{1,12})`/g))refs.push(resolveReference(match[1],'path'));
   }
   function collect(value:unknown,depth=0){
     if(depth>7||refs.length>=200||!value||typeof value!=='object')return;
     if(Array.isArray(value)){for(const item of value.slice(0,100))collect(item,depth+1);return;}
     for(const [key,item]of Object.entries(value)){
-      if(['path','file_path','filePath','relativePath','outputPath','url'].includes(key)&&typeof item==='string')refs.push(item);
+      if(['path','file_path','filePath','relativePath','outputPath','url'].includes(key)&&typeof item==='string')refs.push(resolveReference(item,key==='url'?'link':'path'));
       else if(item&&typeof item==='object')collect(item,depth+1);
     }
   }
   collect(session.result);
   for(const t of session.tools.filter(t=>t.runId===session.runId&&!!t.runId)){try{collect(JSON.parse(t.detail));}catch{}}
-  return [...new Set(refs)].slice(0,100);
+  return [...new Set(refs.filter((p):p is string=>!!p))].slice(0,100);
 }
 export async function sessionArtifacts(session:Session,workspace:Workspace):Promise<ResultFile[]>{
-  const paths=[...new Set(referencedFiles(session).map(r=>resultPath(workspace,r)).filter((p):p is string=>!!p))];
+  const paths=referencedFiles(session,(value,kind)=>resultPath(workspace,value,kind));
   const results=await Promise.all(paths.map(async path=>{
     try{const file=await authorizedPath(workspace,path);const info=await stat(file);if(!info.isFile())return;
       return{id:createHash('sha256').update(session.id+'\0'+path).digest('hex'),path,name:basename(path),kind:fileKind(path),bytes:info.size,source:'任务引用的工作区文件'} satisfies ResultFile;
